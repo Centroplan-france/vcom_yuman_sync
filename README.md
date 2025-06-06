@@ -12,6 +12,7 @@ The project currently exposes a production ready VCOM client, helpers for Google
 
 - Python 3.9+
 - `requests` (see `requirements.txt`)
+- `python-dotenv` for loading environment variables from a `.env` file
 - Optional: `google.colab` modules for the smart import solution.
 
 Install the dependencies with:
@@ -29,7 +30,7 @@ These credentials must be available in your environment:
 - `VCOM_PASSWORD` – VCOM account password
 - `YUMAN_TOKEN` – API token for Yuman
 
-Set them manually or create a `.env` file:
+Set them manually or create a `.env` file which will be loaded automatically:
 
 ```bash
 export VCOM_API_KEY="your-key"

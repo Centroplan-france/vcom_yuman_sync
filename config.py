@@ -8,7 +8,13 @@ Version: 1.0
 import os
 from pathlib import Path
 from typing import Dict, Any
-from google.colab import userdata
+
+# Load environment variables from a .env file if present
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 
 class Config:
     """Configuration centralisée du projet"""
@@ -21,9 +27,9 @@ class Config:
     # === CONFIGURATION VCOM API ===
     VCOM_CONFIG = {
         "base_url": "https://api.meteocontrol.de/v2",
-        "api_key": userdata.get('VCOM_API_KEY'),
-        "username": userdata.get('VCOM_USERNAME'),
-        "password": userdata.get('VCOM_PASSWORD'),
+        "api_key": os.getenv("VCOM_API_KEY"),
+        "username": os.getenv("VCOM_USERNAME"),
+        "password": os.getenv("VCOM_PASSWORD"),
         "rate_limits": {
             "requests_per_minute": 90,    # API 10.000 level
             "requests_per_day": 10000,
@@ -40,7 +46,7 @@ class Config:
     # === CONFIGURATION YUMAN API ===
     YUMAN_CONFIG = {
         "base_url": "https://api.yuman.io/v1",
-        "token": userdata.get('YUMAN_TOKEN'),
+        "token": os.getenv("YUMAN_TOKEN"),
         "rate_limits": {
             "requests_per_second": 4,
             "requests_per_minute": 59,
