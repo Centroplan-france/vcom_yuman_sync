@@ -1,32 +1,39 @@
 """supabase_setup.py
 --------------------
-Initialise la base Postgres hébergée sur Supabase (ou locale) pour le projet
-VCOM ↔ Yuman.
+Initialise la base Postgres (Supabase) pour VCOM ↔ Yuman.
+
+• Compatible PgBouncer (pooler 6543) : exécute la DDL en **AUTOCOMMIT**.
+• Force le `search_path` sur `public`.
+• Importe explicitement `models` pour que SQLModel voie toutes les tables !  
+  (sinon `metadata` serait vide et aucune table ne serait créée.)
 
 Usage :
-    python supabase_setup.py       # crée toutes les tables si elles n’existent pas
-
-Le script importe :
-    • `engine` depuis db.py  – configuré avec env var `DATABASE_URL`
-    • les modèles SQLModel définis dans models.py.
-
-Il n’applique aucun DROP : si les tables existent déjà, elles sont laissées
-intactes. Ajoute simplement les tables manquantes.
+    python supabase_setup.py
 """
 
+import logging
+from sqlalchemy import text
 from sqlmodel import SQLModel
 
-from db import engine  # reuse the engine configured via DATABASE_URL
-import logging
+# 👉 IMPORTANT : enregistre les classes-table auprès de SQLModel.metadata
+import models  # noqa: F401 — side‑effect import, keep it!
+
+from db import engine  # engine configuré via env DATABASE_URL
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 
 
 def create_tables() -> None:
-    """Create all tables declared in models.py if they don’t already exist."""
-    logging.info("Creating tables …")
-    SQLModel.metadata.create_all(engine)
-    logging.info("✅  All tables are present (created if absent).")
+    """Crée toutes les tables déclarées dans models.py (AUTOCOMMIT)."""
+    logging.info("Creating tables in AUTOCOMMIT mode …")
+
+    # Ouvrir une connexion hors transaction (nécessaire avec PgBouncer)
+    with engine.connect() as conn:
+        conn = conn.execution_options(isolation_level="AUTOCOMMIT")
+        conn.execute(text("set search_path to public"))
+        SQLModel.metadata.create_all(conn)
+
+    logging.info("✅ Tables checked/created in schema public.")
 
 
 if __name__ == "__main__":
