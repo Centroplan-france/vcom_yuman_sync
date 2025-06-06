@@ -6,6 +6,7 @@ Version: 1.0
 """
 
 import os
+from pathlib import Path
 from typing import Dict, Any
 from google.colab import userdata
 
@@ -13,9 +14,9 @@ class Config:
     """Configuration centralisée du projet"""
     
     # === CHEMINS ET STRUCTURE ===
-    PROJECT_ROOT = "/content/drive/MyDrive/VCOM_Yuman_Sync"
-    DATABASE_PATH = f"{PROJECT_ROOT}/vcom_yuman_mapping.db"
-    LOGS_DIR = f"{PROJECT_ROOT}/logs"
+    PROJECT_ROOT = Path(__file__).resolve().parent
+    DATABASE_PATH = PROJECT_ROOT / "vcom_yuman_mapping.db"
+    LOGS_DIR = PROJECT_ROOT / "logs"
     
     # === CONFIGURATION VCOM API ===
     VCOM_CONFIG = {
@@ -87,5 +88,5 @@ class Config:
     @classmethod
     def create_dirs(cls):
         """Crée les dossiers nécessaires"""
-        os.makedirs(cls.LOGS_DIR, exist_ok=True)
-        print(f"📁 Dossiers créés: {cls.PROJECT_ROOT}")
+        os.makedirs(str(cls.LOGS_DIR), exist_ok=True)
+        print(f"📁 Dossiers créés: {str(cls.PROJECT_ROOT)}")
