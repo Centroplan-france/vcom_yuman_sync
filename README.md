@@ -6,14 +6,13 @@ This repository provides utilities to synchronise data between the VCOM (meteoco
 2. **Transformation** – map the VCOM payloads to the structure required by Yuman and store mappings in the local `vcom_yuman_mapping.db` database.
 3. **Loading** – push the processed information to Yuman and close tickets when needed.
 
-The project currently exposes a production ready VCOM client, helpers for Google Colab environments and a full test suite.
+The project currently exposes a production ready VCOM client, a full test suite.
 
 ## Requirements
 
 - Python 3.9+
 - `requests` (see `requirements.txt`)
 - `python-dotenv` for loading environment variables from a `.env` file
-- Optional: `google.colab` modules for the smart import solution.
 
 Install the dependencies with:
 
