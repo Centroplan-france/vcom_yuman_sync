@@ -10,8 +10,15 @@ import time
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Union
-from google.colab import userdata
+import os
 import json
+
+# Automatically load environment variables from a .env file if available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 
 class VCOMAPIClient:
     """Client API VCOM avec gestion complète des rate limits et erreurs"""
@@ -21,9 +28,9 @@ class VCOMAPIClient:
         
         # Configuration
         self.base_url = "https://api.meteocontrol.de/v2"
-        self.api_key = userdata.get('VCOM_API_KEY')
-        self.username = userdata.get('VCOM_USERNAME') 
-        self.password = userdata.get('VCOM_PASSWORD')
+        self.api_key = os.getenv("VCOM_API_KEY")
+        self.username = os.getenv("VCOM_USERNAME")
+        self.password = os.getenv("VCOM_PASSWORD")
         
         # Rate limiting (basé sur API 10.000)
         self.rate_limits = {
