@@ -30,13 +30,23 @@ These credentials must be available in your environment:
 - `VCOM_PASSWORD` – VCOM account password
 - `YUMAN_TOKEN` – API token for Yuman
 
-Set them manually or create a `.env` file which will be loaded automatically:
+You can export them manually or place them inside a local `.env` file. The
+library `python-dotenv` is installed with the project and all modules call
+`load_dotenv()` so the variables are picked up automatically. Use the
+`.env.example` file as a template and create your own `.env` file at the
+repository root:
 
 ```bash
-export VCOM_API_KEY="your-key"
-export VCOM_USERNAME="your-user"
-export VCOM_PASSWORD="your-password"
-export YUMAN_TOKEN="your-token"
+cp .env.example .env
+```
+
+Edit `.env` and provide your real credentials:
+
+```dotenv
+VCOM_API_KEY=your-key
+VCOM_USERNAME=your-user
+VCOM_PASSWORD=your-password
+YUMAN_TOKEN=your-token
 ```
 
 ## Basic Usage
@@ -56,4 +66,25 @@ Compile the modules and run the tests using pytest:
 ```bash
 python -m py_compile $(git ls-files '*.py')
 python -m pytest tests/test_vcom.py -v
+```
+
+## GitHub Actions Secrets
+
+When running this project in GitHub Actions, store the credentials as
+repository secrets so they are injected as environment variables. Add the
+following secrets in your repository settings:
+
+- `VCOM_API_KEY`
+- `VCOM_USERNAME`
+- `VCOM_PASSWORD`
+- `YUMAN_TOKEN`
+
+These secrets can then be referenced in a workflow like:
+
+```yaml
+env:
+  VCOM_API_KEY: ${{ secrets.VCOM_API_KEY }}
+  VCOM_USERNAME: ${{ secrets.VCOM_USERNAME }}
+  VCOM_PASSWORD: ${{ secrets.VCOM_PASSWORD }}
+  YUMAN_TOKEN: ${{ secrets.YUMAN_TOKEN }}
 ```
