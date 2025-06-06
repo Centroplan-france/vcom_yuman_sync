@@ -1,2 +1,4 @@
-requests
+psycopg[binary]
 python-dotenv
+requests
+sqlmodel
