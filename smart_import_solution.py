@@ -5,15 +5,15 @@ Permet d'utiliser les modules .py stockés sur Google Drive
 """
 
 import importlib.util
-import os
 import sys
+from pathlib import Path
 from typing import Any
 
 class SmartImporter:
     """Gestionnaire d'imports intelligent pour Google Drive + Colab"""
     
-    def __init__(self, project_path: str = '/content/drive/MyDrive/VCOM_Yuman_Sync'):
-        self.project_path = project_path
+    def __init__(self, project_path: Path = Path(__file__).resolve().parent):
+        self.project_path = Path(project_path)
         self.loaded_modules = {}
         
     def import_module(self, module_name: str) -> Any:
@@ -34,15 +34,15 @@ class SmartImporter:
             return self.loaded_modules[module_name]
             
         # Construire le chemin du fichier
-        module_path = os.path.join(self.project_path, f"{module_name}.py")
+        module_path = self.project_path / f"{module_name}.py"
         
         # Vérifier existence
-        if not os.path.exists(module_path):
+        if not module_path.exists():
             raise ImportError(f"Module {module_name} non trouvé: {module_path}")
             
         try:
             # Créer spec et charger module
-            spec = importlib.util.spec_from_file_location(module_name, module_path)
+            spec = importlib.util.spec_from_file_location(module_name, str(module_path))
             if spec is None:
                 raise ImportError(f"Impossible de créer spec pour {module_name}")
                 
@@ -81,8 +81,7 @@ class SmartImporter:
     def list_available_modules(self) -> list:
         """Liste les modules .py disponibles dans le projet"""
         try:
-            files = os.listdir(self.project_path)
-            return [f[:-3] for f in files if f.endswith('.py') and f != '__init__.py']
+            return [p.stem for p in self.project_path.iterdir() if p.suffix == '.py' and p.name != '__init__.py']
         except:
             return []
 
