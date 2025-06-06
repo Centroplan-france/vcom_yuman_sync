@@ -11,9 +11,10 @@ from typing import Dict, List, Any
 import traceback
 import sys
 import os
+from pathlib import Path
 
 # Import du client VCOM
-sys.path.append('/content/drive/MyDrive/VCOM_Yuman_Sync')
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 from vcom_client import VCOMAPIClient
 
 class VCOMTestSuite:
