@@ -64,7 +64,7 @@ Compile the modules and run the tests using pytest:
 
 ```bash
 python -m py_compile $(git ls-files '*.py')
-python -m pytest tests/test_vcom.py -v
+python -m pytest -v
 ```
 
 ## GitHub Actions Secrets

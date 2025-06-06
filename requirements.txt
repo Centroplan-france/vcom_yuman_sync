@@ -2,3 +2,4 @@ psycopg[binary]
 python-dotenv
 requests
 sqlmodel
+pytest
