@@ -106,6 +106,9 @@ class Site(SQLModel, table=True):
     commission_date: Optional[date] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+    ignore_site: bool = Field(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
+
+
     # relationships
     client: Client = Relationship(back_populates="sites")
     equipments: List["Equipment"] = Relationship(back_populates="site")
