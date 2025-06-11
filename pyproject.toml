@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "vcom-yuman-sync"
+version = "0.1.0"
+description = ""
+authors = []
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.11"
+requests = "^2.32.4"
+python-dotenv = "^1.1.0"
+sqlmodel = "^0.0.24"
+psycopg = {version = "^3.2.9", extras = ["binary"]}
+psycopg2-binary = "^2.9.10"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.4.0"
+ruff = "^0.11.13"
+requests-mock = "^1.12.1"
+
+

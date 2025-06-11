@@ -1,5 +1,7 @@
 import logging
 import pytest
+pytestmark = pytest.mark.integration
+
 
 cache = {}
 
@@ -18,7 +20,7 @@ def test_session_info(vcom_client):
     """#3: retrieve session info"""
     session = vcom_client.get_session()
     cache['session'] = session
-    assert 'user' in session
+    assert 'user' in session.get('data', {})
 
 
 def test_systems_list(vcom_client):
