@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""
-Client API VCOM - Production Ready
-Gestion complète des rate limits, erreurs, retry, logging
-Version: 1.0
-"""
+"""VCOM API client with basic rate limit handling."""
 
 import requests
 import time
 import logging
+
+from src.logging import init_logger
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Union
 import os
@@ -20,11 +18,13 @@ try:
 except Exception:
     pass
 
+logger = init_logger(__name__)
+
 class VCOMAPIClient:
-    """Client API VCOM avec gestion complète des rate limits et erreurs"""
-    
+    """VCOM API client with basic helpers."""
+
     def __init__(self, log_level=logging.INFO):
-        """Initialise le client VCOM"""
+        """Initialise the VCOM client."""
         
         # Configuration
         self.base_url = "https://api.meteocontrol.de/v2"
@@ -32,7 +32,7 @@ class VCOMAPIClient:
         self.username = os.getenv("VCOM_USERNAME")
         self.password = os.getenv("VCOM_PASSWORD")
         
-        # Rate limiting (basé sur API 10.000)
+        # Rate limiting based on VCOM API 10.000 plan
         self.rate_limits = {
             "requests_per_minute": 90,
             "requests_per_day": 10000,
@@ -40,45 +40,30 @@ class VCOMAPIClient:
             "adaptive_delay": 2.0
         }
         
-        # Tracking des requêtes
+        # Request tracking
         self.request_history = []
         self.last_request_time = 0
         self.consecutive_errors = 0
         
-        # Headers par défaut
+        # Default headers
         self.default_headers = {
             "X-API-KEY": self.api_key,
             "Accept": "application/json",
             "User-Agent": "VCOM-Yuman-Sync/1.0"
         }
         
-        # Configuration requests
+        # Requests configuration
         self.auth = (self.username, self.password)
         self.timeout = 30
         
-        # Logger
-        self.logger = self._setup_logging(log_level)
+        self.logger = logger
+        self.logger.setLevel(log_level)
         
-        # Validation initiale
+        # Basic validation
         self._validate_credentials()
         
-        self.logger.info("🚀 Client VCOM initialisé avec succès")
-    
-    def _setup_logging(self, level=logging.INFO) -> logging.Logger:
-        """Configure le système de logging"""
-        logger = logging.getLogger('VCOMClient')
-        logger.setLevel(level)
-        
-        if not logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                '%(asctime)s [%(levelname)s] VCOM: %(message)s',
-                datefmt='%H:%M:%S'
-            )
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-        
-        return logger
+
+        self.logger.info("VCOM client initialised")
     
     def _validate_credentials(self):
         """Valide les credentials obligatoires"""
@@ -94,47 +79,49 @@ class VCOMAPIClient:
         """Applique le rate limiting intelligent"""
         now = time.time()
         
-        # Nettoie l'historique (garde dernière minute)
+        # Clean history (keep last minute)
         cutoff = now - 60
         self.request_history = [t for t in self.request_history if t > cutoff]
         
-        # Calcule le délai nécessaire
+        # Compute required delay
         if self.last_request_time > 0:
             elapsed = now - self.last_request_time
             remaining_requests = self.rate_limits["requests_per_minute"] - len(self.request_history)
             
-            # Délai adaptatif selon le quota restant
+            # Adaptive delay depending on remaining quota
             if remaining_requests <= 10:
                 min_delay = self.rate_limits["adaptive_delay"]
-                self.logger.warning(f"⚠️ Quota faible ({remaining_requests} restantes), délai augmenté")
+                self.logger.warning(
+                    "Low quota (%s left), increasing delay", remaining_requests
+                )
             else:
                 min_delay = self.rate_limits["min_delay"]
             
             if elapsed < min_delay:
                 sleep_time = min_delay - elapsed
-                self.logger.debug(f"⏱️ Rate limiting: pause {sleep_time:.2f}s")
+                self.logger.debug("Rate limiting: pause %.2fs", sleep_time)
                 time.sleep(sleep_time)
         
-        # Met à jour les trackers
+        # Update trackers
         self.last_request_time = time.time()
         self.request_history.append(self.last_request_time)
     
     def _make_request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
-        """Effectue une requête avec gestion complète des erreurs"""
+        """Perform an HTTP request with basic retries."""
         
-        # Application du rate limiting
+        # Apply rate limiting
         self._enforce_rate_limit()
         
-        # Construction URL
+        # Build URL
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
         
-        # Merge des headers
+        # Merge headers
         headers = self.default_headers.copy()
         if 'headers' in kwargs:
             headers.update(kwargs['headers'])
             del kwargs['headers']
         
-        # Configuration de la requête
+        # Build request parameters
         request_config = {
             'headers': headers,
             'auth': self.auth,
@@ -142,68 +129,81 @@ class VCOMAPIClient:
             **kwargs
         }
         
-        # Retry logic
+        # Simple retry logic
         max_attempts = 3
         for attempt in range(max_attempts):
             try:
-                self.logger.debug(f"📡 {method.upper()} {endpoint} (tentative {attempt + 1})")
+                self.logger.debug(
+                    "%s %s (attempt %s)", method.upper(), endpoint, attempt + 1
+                )
                 
                 response = requests.request(method, url, **request_config)
                 
-                # Gestion des codes de statut
+                # Status code handling
                 if response.status_code == 429:
                     retry_after = int(response.headers.get('Retry-After', 60))
-                    self.logger.warning(f"⏳ Rate limit atteint, pause {retry_after}s")
+                    self.logger.warning(
+                        "Rate limit hit, sleeping %s s", retry_after
+                    )
                     time.sleep(retry_after)
                     continue
                 
                 elif response.status_code == 401:
-                    self.logger.error("🔐 Erreur d'authentification")
-                    raise requests.exceptions.HTTPError("Authentification échouée")
+                    self.logger.error("Authentication error")
+                    raise requests.exceptions.HTTPError("Authentication failed")
                 
                 elif response.status_code >= 500:
-                    self.logger.warning(f"🔧 Erreur serveur {response.status_code}, retry")
+                    self.logger.warning(
+                        "Server error %s, retry", response.status_code
+                    )
                     if attempt < max_attempts - 1:
-                        time.sleep(2 ** attempt)  # Backoff exponentiel
+                        time.sleep(2 ** attempt)
                         continue
                 
-                # Log des headers rate limit si présents
+                # Log rate limit headers when available
                 self._log_rate_limit_headers(response)
                 
-                # Succès
+                # Success
                 response.raise_for_status()
                 self.consecutive_errors = 0
                 return response
                 
             except requests.exceptions.RequestException as e:
                 self.consecutive_errors += 1
-                self.logger.error(f"❌ Erreur requête (tentative {attempt + 1}): {str(e)}")
+                self.logger.error(
+                    "Request error (attempt %s): %s", attempt + 1, str(e)
+                )
                 
                 if attempt < max_attempts - 1:
                     sleep_time = 2 ** attempt
-                    self.logger.info(f"⏳ Retry dans {sleep_time}s...")
+                    self.logger.info("Retry in %s s", sleep_time)
                     time.sleep(sleep_time)
                 else:
                     raise
         
-        raise Exception("Nombre maximum de tentatives atteint")
+        raise Exception("Maximum attempts reached")
     
     def _log_rate_limit_headers(self, response: requests.Response):
-        """Log les informations de rate limiting"""
+        """Log rate limiting info"""
         headers = response.headers
         rate_info = {}
         
-        for header in ['X-RateLimit-Remaining-Minute', 'X-RateLimit-Remaining-Day']:
+        for header in [
+            "X-RateLimit-Remaining-Minute",
+            "X-RateLimit-Remaining-Day",
+        ]:
             if header in headers:
                 rate_info[header] = headers[header]
         
         if rate_info:
             remaining_min = rate_info.get('X-RateLimit-Remaining-Minute', 'N/A')
             remaining_day = rate_info.get('X-RateLimit-Remaining-Day', 'N/A')
-            self.logger.debug(f"📊 Quotas restants: {remaining_min}/min, {remaining_day}/jour")
+            self.logger.debug(
+                "Remaining quota: %s/min, %s/day", remaining_min, remaining_day
+            )
     
     def get_rate_limit_status(self) -> Dict[str, Any]:
-        """Retourne le statut actuel des rate limits"""
+        """Return current rate limit status."""
         return {
             "requests_last_minute": len(self.request_history),
             "remaining_minute": max(0, self.rate_limits["requests_per_minute"] - len(self.request_history)),
@@ -212,50 +212,50 @@ class VCOMAPIClient:
         }
     
     def test_connectivity(self) -> bool:
-        """Test rapide de connectivité"""
+        """Quick connectivity check."""
         try:
             response = self._make_request('GET', '/session')
-            self.logger.info("✅ Connectivité VCOM validée")
+            self.logger.info("VCOM connectivity OK")
             return True
         except Exception as e:
-            self.logger.error(f"❌ Test connectivité échoué: {str(e)}")
+            self.logger.error("Connectivity test failed: %s", str(e))
             return False
     
-    # === ENDPOINTS PRINCIPAUX ===
+    # === Main endpoints ===
     
     def get_session(self) -> Dict[str, Any]:
-        """Récupère les informations de session"""
+        """Return current session information."""
         response = self._make_request('GET', '/session')
         return response.json()
     
     def get_systems(self) -> List[Dict[str, Any]]:
-        """Récupère la liste de tous les systèmes"""
+        """Return list of all systems."""
         response = self._make_request('GET', '/systems')
         return response.json().get('data', [])
     
     def get_system_details(self, system_key: str) -> Dict[str, Any]:
-        """Récupère les détails d'un système"""
+        """Return system details."""
         response = self._make_request('GET', f'/systems/{system_key}')
         return response.json().get('data', {})
     
     def get_technical_data(self, system_key: str) -> Dict[str, Any]:
-        """Récupère les données techniques d'un système"""
+        """Return system technical data."""
         response = self._make_request('GET', f'/systems/{system_key}/technical-data')
         return response.json().get('data', {})
     
     def get_inverters(self, system_key: str) -> List[Dict[str, Any]]:
-        """Récupère la liste des onduleurs d'un système"""
+        """Return list of inverters for a system."""
         response = self._make_request('GET', f'/systems/{system_key}/inverters')
         return response.json().get('data', [])
     
     def get_inverter_details(self, system_key: str, inverter_id: str) -> Dict[str, Any]:
-        """Récupère les détails d'un onduleur"""
+        """Return inverter details."""
         response = self._make_request('GET', f'/systems/{system_key}/inverters/{inverter_id}')
         return response.json().get('data', {})
     
     def get_tickets(self, status: str = None, priority: str = None, 
                    system_key: str = None, **kwargs) -> List[Dict[str, Any]]:
-        """Récupère les tickets avec filtres optionnels"""
+        """Return tickets using optional filters."""
         params = {}
         if status: params['status'] = status
         if priority: params['priority'] = priority  
@@ -266,15 +266,15 @@ class VCOMAPIClient:
         return response.json().get('data', [])
     
     def get_ticket_details(self, ticket_id: str) -> Dict[str, Any]:
-        """Récupère les détails d'un ticket"""
+        """Return ticket details."""
         response = self._make_request('GET', f'/tickets/{ticket_id}')
         return response.json().get('data', {})
     
     def update_ticket(self, ticket_id: str, **updates) -> bool:
-        """Met à jour un ticket"""
+        """Update a ticket."""
         response = self._make_request('PATCH', f'/tickets/{ticket_id}', json=updates)
         return response.status_code == 204
     
-    def close_ticket(self, ticket_id: str, summary: str = "Ticket fermé via API") -> bool:
-        """Ferme un ticket"""
+    def close_ticket(self, ticket_id: str, summary: str = "Closed via API") -> bool:
+        """Close a ticket."""
         return self.update_ticket(ticket_id, status="closed", summary=summary)

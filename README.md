@@ -6,6 +6,8 @@ This repository provides utilities to synchronise data between the VCOM (meteoco
 2. **Transformation** – map the VCOM payloads to the structure required by Yuman and store mappings in the local `vcom_yuman_mapping.db` database.
 3. **Loading** – push the processed information to Yuman and close tickets when needed.
 
+Additional conflicts detected during sync are stored in the `conflicts` table for later review.
+
 The project currently exposes a production ready VCOM client, a full test suite.
 
 ## Requirements
@@ -28,6 +30,7 @@ These credentials must be available in your environment:
 - `VCOM_USERNAME` – VCOM account username
 - `VCOM_PASSWORD` – VCOM account password
 - `YUMAN_TOKEN` – API token for Yuman
+- `LOG_LEVEL` – optional log verbosity (default `INFO`)
 
 You can export them manually or place them inside a local `.env` file. The
 library `python-dotenv` is installed with the project and all modules call

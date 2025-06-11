@@ -1,13 +1,4 @@
-"""Data‑model definitions for the VCOM ↔ Yuman sync MVP.
-
-The file follows the schema we just validated:
-  • separate table equipment_field_values for Yuman custom fields
-  • extra jsonb column for raw API payloads (clients & equipments)
-  • enum EqType derived from Yuman category_id
-  • public schema, no RLS yet
-
-Created 2025‑06‑06
-"""
+"""Database models for the VCOM–Yuman synchronisation."""
 
 from __future__ import annotations
 
@@ -17,6 +8,7 @@ from typing import Optional, List
 
 from sqlmodel import SQLModel, Field, Relationship, Column, JSON
 from sqlalchemy import Enum as PgEnum, Numeric
+from sqlalchemy.dialects.postgresql import JSONB
 
 # ---------------------------------------------------------------------------
 # Enum helpers
@@ -25,11 +17,11 @@ from sqlalchemy import Enum as PgEnum, Numeric
 class EqType(str, enum.Enum):
     """Normalized equipment types derived from Yuman `category_id`."""
 
-    inverter = "inverter"
-    module = "module"
-    sim = "sim"
-    plant = "plant"
-    other = "other"
+    INVERTER = "inverter"
+    MODULE = "module"
+    SIM = "sim"
+    PLANT = "plant"
+    OTHER = "other"
 
 
 class Source(str, enum.Enum):
@@ -175,7 +167,7 @@ class Ticket(SQLModel, table=True):
 
     id: int = Field(primary_key=True)
 
-    vcom_ticket_id: str = Field(index=True)
+    vcom_ticket_id: str = Field(index=True, unique=True)
     yuman_workorder_id: int = Field(index=True)
 
     status: Optional[str] = None
@@ -195,3 +187,16 @@ class SyncLog(SQLModel, table=True):
     action: str
     payload: Optional[dict] = Field(sa_column=Column(JSON), default=None)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class Conflict(SQLModel, table=True):
+    """Entities that could not be synced automatically."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    entity_type: str = Field(index=True)
+    entity_id: int | None = Field(default=None, index=True)
+    description: str | None = None
+    status: str = Field(default="pending")
+    payload: dict | None = Field(sa_column=Column(JSONB))
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    resolved_at: datetime | None = None

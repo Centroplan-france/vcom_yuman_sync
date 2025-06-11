@@ -1,39 +1,64 @@
-"""supabase_setup.py
---------------------
-Initialise la base Postgres (Supabase) pour VCOM ↔ Yuman.
-
-• Compatible PgBouncer (pooler 6543) : exécute la DDL en **AUTOCOMMIT**.
-• Force le `search_path` sur `public`.
-• Importe explicitement `models` pour que SQLModel voie toutes les tables !  
-  (sinon `metadata` serait vide et aucune table ne serait créée.)
-
-Usage :
-    python supabase_setup.py
-"""
+"""Initialise the Postgres schema for the sync utilities."""
 
 import logging
+import os
+from typing import List
+
+import requests
 from sqlalchemy import text
 from sqlmodel import SQLModel
 
-# 👉 IMPORTANT : enregistre les classes-table auprès de SQLModel.metadata
-import models  # noqa: F401 — side‑effect import, keep it!
+from src.logging import init_logger
 
-from db import engine  # engine configuré via env DATABASE_URL
+# Register models so SQLModel is aware of them
+import models  # noqa: F401 -- register models
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
+from db import engine
+
+logger = init_logger(__name__)
+
+
+def _fetch_categories(token: str) -> List[dict]:
+    url = "https://api.yuman.io/v1/material_categories"
+    resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    items = data.get("items", data)
+    return [{"id": int(it["id"]), "name": it.get("label") or it.get("name", "")} for it in items]
 
 
 def create_tables() -> None:
-    """Crée toutes les tables déclarées dans models.py (AUTOCOMMIT)."""
-    logging.info("Creating tables in AUTOCOMMIT mode …")
+    """Create all tables declared in models.py using AUTOCOMMIT."""
+    logger.info("Creating tables in AUTOCOMMIT mode ...")
 
-    # Ouvrir une connexion hors transaction (nécessaire avec PgBouncer)
     with engine.connect() as conn:
         conn = conn.execution_options(isolation_level="AUTOCOMMIT")
         conn.execute(text("set search_path to public"))
         SQLModel.metadata.create_all(conn)
 
-    logging.info("✅ Tables checked/created in schema public.")
+        conn.execute(
+            text(
+                "ALTER TABLE tickets_mapping ADD CONSTRAINT IF NOT EXISTS uniq_vcom_ticket UNIQUE (vcom_ticket_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "ALTER TABLE sites_mapping ADD CONSTRAINT IF NOT EXISTS uniq_system_key UNIQUE (vcom_system_key)"
+            )
+        )
+
+        token = os.getenv("YUMAN_TOKEN")
+        if token:
+            categories = _fetch_categories(token)
+            for cat in categories:
+                conn.execute(
+                    text(
+                        "INSERT INTO equipment_categories (id, name) VALUES (:id, :name) ON CONFLICT (id) DO NOTHING"
+                    ),
+                    cat,
+                )
+
+    logger.info("Tables ensured and constraints applied.")
 
 
 if __name__ == "__main__":
