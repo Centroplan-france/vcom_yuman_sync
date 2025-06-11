@@ -1,21 +1,4 @@
-"""yuman_client.py
------------------
-High‑level wrapper autour de l’API Yuman v1.
-
-• Auth : Bearer token (env YUMAN_TOKEN ou param explicit)
-• Pagination automatique (per_page <= 200)
-• Retry exponentiel 429 (jusqu’à max_retry)
-• GET / POST / PATCH helpers
-• Méthodes CRUD minimalistes pour : clients, sites, materials, workorders
-
-Usage rapide :
->>> yc = YumanClient(token="…")
->>> sites = yc.list_sites()
->>> yc.create_site({"name": "Demo", …})
-
-NB : le client renvoie des `dict` bruts ; la conversion vers des
-   modèles SQLModel/Pydantic se fait dans le layer repository.
-"""
+"""Small wrapper around the Yuman v1 REST API."""
 
 from __future__ import annotations
 
@@ -24,23 +7,24 @@ import time
 import logging
 from typing import Any, Dict, List, Optional
 
+from src.logging import init_logger
+
 import requests
 from requests import Response
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger = init_logger(__name__)
 
-DEFAULT_PER_PAGE = 100  # Yuman accepte jusqu'à 200
+DEFAULT_PER_PAGE = 100  # Yuman accepts up to 200
 DEFAULT_MAX_RETRY = 5
-DEFAULT_BACKOFF = 2.0  # sec (exponentiel)
+DEFAULT_BACKOFF = 2.0  # exponential backoff in seconds
 
 
 class YumanClientError(Exception):
-    """Erreur générique côté client Yuman."""
+    """Generic client-side Yuman error."""
 
 
 class YumanClient:  # pylint: disable=too-many-public-methods
-    """Client REST simple pour Yuman v1."""
+    """Simple REST client for Yuman v1."""
 
     def __init__(
         self,

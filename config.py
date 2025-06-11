@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""
-Configuration centralisée - Projet VCOM-Yuman Sync
-Gestion des credentials, rate limits, chemins, constantes
-Version: 1.0
-"""
+"""Central configuration for the VCOM–Yuman synchronisation utilities."""
 
 import os
 from pathlib import Path
@@ -17,9 +13,9 @@ except Exception:
     pass
 
 class Config:
-    """Configuration centralisée du projet"""
+    """Project configuration container."""
     
-    # === CHEMINS ET STRUCTURE ===
+    # === PATHS AND STRUCTURE ===
     PROJECT_ROOT = Path(__file__).resolve().parent
     DATABASE_PATH = PROJECT_ROOT / "vcom_yuman_mapping.db"
     LOGS_DIR = PROJECT_ROOT / "logs"
@@ -33,8 +29,8 @@ class Config:
         "rate_limits": {
             "requests_per_minute": 90,    # API 10.000 level
             "requests_per_day": 10000,
-            "min_delay": 0.80,            # 0.8s entre requêtes
-            "adaptive_delay": 2.0         # Si < 10 restantes
+            "min_delay": 0.80,            # 0.8s between requests
+            "adaptive_delay": 2.0         # When quota gets low
         },
         "retry": {
             "max_attempts": 3,
@@ -43,7 +39,7 @@ class Config:
         }
     }
     
-    # === CONFIGURATION YUMAN API ===
+    # === YUMAN API CONFIGURATION ===
     YUMAN_CONFIG = {
         "base_url": "https://api.yuman.io/v1",
         "token": os.getenv("YUMAN_TOKEN"),
@@ -54,7 +50,7 @@ class Config:
             "min_delay": 0.25             # 4 req/sec max
         },
         "pagination": {
-            "per_page": 50,               # Limite Yuman
+            "per_page": 50,
             "max_pages": 100
         },
         "retry": {
@@ -66,17 +62,17 @@ class Config:
     
     @classmethod
     def get_vcom_config(cls) -> Dict[str, Any]:
-        """Retourne la configuration VCOM"""
+        """Return VCOM configuration."""
         return cls.VCOM_CONFIG.copy()
     
     @classmethod 
     def get_yuman_config(cls) -> Dict[str, Any]:
-        """Retourne la configuration Yuman"""
+        """Return Yuman configuration."""
         return cls.YUMAN_CONFIG.copy()
     
     @classmethod
     def validate_credentials(cls) -> Dict[str, bool]:
-        """Valide la présence des credentials"""
+        """Check that all credentials are present."""
         vcom_valid = all([
             cls.VCOM_CONFIG["api_key"],
             cls.VCOM_CONFIG["username"], 
@@ -93,6 +89,6 @@ class Config:
     
     @classmethod
     def create_dirs(cls):
-        """Crée les dossiers nécessaires"""
+        """Create required directories."""
         os.makedirs(str(cls.LOGS_DIR), exist_ok=True)
-        print(f"📁 Dossiers créés: {str(cls.PROJECT_ROOT)}")
+        print(f"Directories created: {str(cls.PROJECT_ROOT)}")
