@@ -158,6 +158,13 @@ class YumanClient:  # pylint: disable=too-many-public-methods
 
     def update_material(self, material_id: int, patch: Dict[str, Any]) -> Dict[str, Any]:
         return self._patch(f"materials/{material_id}", patch)
+    
+    # ------------------------------------------------------------------
+    # Categories
+    # ------------------------------------------------------------------
+    def get_material_categories(self) -> List[Dict[str, Any]]:
+        """Return equipment categories (id, name) from Yuman."""
+        return self._get("materials/categories")
 
     # ------------------------------------------------------------------
     # Workorders

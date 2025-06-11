@@ -1,76 +1,90 @@
-"""Initialise the Postgres schema for the sync utilities."""
+"""
+Initialise or update the Supabase/Postgres schema for VCOM ↔ Yuman Sync.
+"""
+
+from __future__ import annotations
 
 import os
 from typing import List
 
-import requests
 from sqlalchemy import text
 from sqlmodel import SQLModel
+from datetime import datetime 
 
-from src.vysync.yuman_client import YumanClient
-from src.vysync.logging import init_logger
-
-# Register models so SQLModel is aware of them
-import src.vysync.models  # noqa: F401 -- register models
-
-from src.vysync.db import engine
+from vysync.db import engine
+from vysync.logging import init_logger
+from vysync.yuman_client import YumanClient
 
 logger = init_logger(__name__)
 
 
-def _fetch_categories(token: str) -> List[dict]:
-    url = "https://api.yuman.io/v1/material_categories"
-    resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
-    items = data.get("items", data)
-    return [{"id": int(it["id"]), "name": it.get("label") or it.get("name", "")} for it in items]
+# --------------------------------------------------------------------------- #
+# Helpers                                                                     #
+# --------------------------------------------------------------------------- #
+def _constraint_exists(conn, table: str, name: str) -> bool:
+    sql = """
+    SELECT 1
+    FROM pg_constraint c
+    JOIN pg_class t ON c.conrelid = t.oid
+    WHERE t.relname = :table AND c.conname = :name
+    """
+    return bool(conn.execute(text(sql), {"table": table, "name": name}).fetchone())
 
 
-def create_tables() -> None:
-    """Create all tables declared in models.py using AUTOCOMMIT."""
-    logger.info("Creating tables in AUTOCOMMIT mode ...")
+def _add_constraint(conn, table: str, column: str, name: str) -> None:
+    if engine.dialect.name != "postgresql":
+        return
+    if _constraint_exists(conn, table, name):
+        logger.debug("Constraint %s already present – skipped", name)
+        return
+    ddl = f"ALTER TABLE {table} ADD CONSTRAINT {name} UNIQUE ({column})"
+    conn.execute(text(ddl))
+    logger.info("Constraint %s created", name)
 
-    with engine.connect() as conn:
-        conn = conn.execution_options(isolation_level="AUTOCOMMIT")
-        conn.execute(text("set search_path to public"))
+
+# --------------------------------------------------------------------------- #
+# Schema creation                                                             #
+# --------------------------------------------------------------------------- #
+def ensure_schema() -> None:
+    with engine.begin() as conn:
+        conn.execute(text("SET search_path TO public"))
         SQLModel.metadata.create_all(conn)
 
-        conn.execute(
-            text(
-                "ALTER TABLE tickets_mapping ADD CONSTRAINT IF NOT EXISTS uniq_vcom_ticket UNIQUE (vcom_ticket_id)"
+        _add_constraint(conn, "tickets_mapping", "vcom_ticket_id", "uniq_vcom_ticket")
+        _add_constraint(conn, "sites_mapping", "vcom_system_key", "uniq_system_key")
+
+    logger.info("Schema ensured and constraints applied.")
+
+
+# --------------------------------------------------------------------------- #
+# Category import                                                             #
+# --------------------------------------------------------------------------- #
+def sync_categories(token: str) -> None:
+    yc = YumanClient(token)
+    cats: List[dict] = yc.get_material_categories()  # [{'id': .., 'name': ..}, ...]
+
+    with engine.begin() as conn:
+        for c in cats:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO equipment_categories (id, name, created_at)
+                    VALUES (:id, :name, now())
+                    ON CONFLICT (id) DO NOTHING
+                    """
+                ),
+                {"id": c["id"], "name": c["name"]},
             )
-        )
-        conn.execute(
-            text(
-                "ALTER TABLE sites_mapping ADD CONSTRAINT IF NOT EXISTS uniq_system_key UNIQUE (vcom_system_key)"
-            )
-        )
+    logger.info("Equipment categories synced (%s rows)", len(cats))
 
-        token = os.getenv("YUMAN_TOKEN")
-        if token:
-            categories = _fetch_categories(token)
-            for cat in categories:
-                conn.execute(
-                    text(
-                        "INSERT INTO equipment_categories (id, name) VALUES (:id, :name) ON CONFLICT (id) DO NOTHING"
-                    ),
-                    cat,
-                )
 
-    logger.info("Tables ensured and constraints applied.")
-
-yc = YumanClient(os.getenv("YUMAN_TOKEN"))
-cats = yc.get_material_categories()  # à implémenter très simple -> GET /materials/categories
-with engine.begin() as conn:
-    for c in cats:
-        conn.execute(
-            text(
-              "INSERT INTO equipment_categories (id, label) VALUES (:id, :lbl) "
-              "ON CONFLICT DO NOTHING"
-            ),
-            {"id": c["id"], "lbl": c["name"]},
-        )
-
+# --------------------------------------------------------------------------- #
+# CLI entry-point                                                             #
+# --------------------------------------------------------------------------- #
 if __name__ == "__main__":
-    create_tables()
+    ensure_schema()
+    token = os.getenv("YUMAN_TOKEN")
+    if token:
+        sync_categories(token)
+    else:
+        logger.warning("YUMAN_TOKEN not set – skipping category import")

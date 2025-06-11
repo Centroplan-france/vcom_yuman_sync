@@ -3,8 +3,12 @@ name = "vcom-yuman-sync"
 version = "0.1.0"
 description = ""
 authors = []
-package-mode = false
 
+package-mode = true      # <- active l'installation du package
+
+packages = [
+  { include = "vysync", from = "src" }
+]
 [tool.poetry.dependencies]
 python = "^3.11"
 requests = "^2.32.4"
