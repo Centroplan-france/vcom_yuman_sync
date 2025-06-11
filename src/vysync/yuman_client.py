@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import os
 import time
-import logging
 from typing import Any, Dict, List, Optional
 
-from src.logging import init_logger
 
 import requests
 from requests import Response
-
+from .logging import init_logger
 logger = init_logger(__name__)
 
 DEFAULT_PER_PAGE = 100  # Yuman accepts up to 200

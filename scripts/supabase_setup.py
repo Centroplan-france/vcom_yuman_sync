@@ -8,12 +8,12 @@ import requests
 from sqlalchemy import text
 from sqlmodel import SQLModel
 
-from src.logging import init_logger
+from src.vysync.logging import init_logger
 
 # Register models so SQLModel is aware of them
-import models  # noqa: F401 -- register models
+import src.vysync.models  # noqa: F401 -- register models
 
-from db import engine
+from src.vysync.db import engine
 
 logger = init_logger(__name__)
 
@@ -60,6 +60,18 @@ def create_tables() -> None:
 
     logger.info("Tables ensured and constraints applied.")
 
+from yuman_client import YumanClient
+yc = YumanClient(os.getenv("YUMAN_TOKEN"))
+cats = yc.get_material_categories()  # à implémenter très simple -> GET /materials/categories
+with engine.begin() as conn:
+    for c in cats:
+        conn.execute(
+            text(
+              "INSERT INTO equipment_categories (id, label) VALUES (:id, :lbl) "
+              "ON CONFLICT DO NOTHING"
+            ),
+            {"id": c["id"], "lbl": c["name"]},
+        )
 
 if __name__ == "__main__":
     create_tables()

@@ -5,6 +5,9 @@ import os
 from pathlib import Path
 from typing import Dict, Any
 
+from .logging import init_logger
+logger = init_logger(__name__)
+
 # Load environment variables from a .env file if present
 try:
     from dotenv import load_dotenv

@@ -8,9 +8,10 @@ No real HTTP calls are made.
 import os
 from typing import List, Dict
 import pytest
+
+from src.vysync.yuman_client import YumanClient
 pytestmark = pytest.mark.integration
 
-from yuman_client import YumanClient
 
 # ---------------------------------------------------------------------------
 # Helpers

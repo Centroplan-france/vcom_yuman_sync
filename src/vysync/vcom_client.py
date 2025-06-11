@@ -4,12 +4,9 @@
 import requests
 import time
 import logging
-
-from src.logging import init_logger
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Union
+from .logging import init_logger
+from typing import Dict, List, Any
 import os
-import json
 
 # Automatically load environment variables from a .env file if available
 try:
@@ -19,6 +16,7 @@ except Exception:
     pass
 
 logger = init_logger(__name__)
+
 
 class VCOMAPIClient:
     """VCOM API client with basic helpers."""
@@ -69,9 +67,12 @@ class VCOMAPIClient:
         """Valide les credentials obligatoires"""
         if not all([self.api_key, self.username, self.password]):
             missing = []
-            if not self.api_key: missing.append("VCOM_API_KEY")
-            if not self.username: missing.append("VCOM_USERNAME") 
-            if not self.password: missing.append("VCOM_PASSWORD")
+            if not self.api_key: 
+                missing.append("VCOM_API_KEY")
+            if not self.username: 
+                missing.append("VCOM_USERNAME") 
+            if not self.password: 
+                missing.append("VCOM_PASSWORD")
             
             raise ValueError(f"❌ Credentials manquants: {', '.join(missing)}")
     
@@ -214,8 +215,8 @@ class VCOMAPIClient:
     def test_connectivity(self) -> bool:
         """Quick connectivity check."""
         try:
-            response = self._make_request('GET', '/session')
             self.logger.info("VCOM connectivity OK")
+            self._make_request('GET', '/session')
             return True
         except Exception as e:
             self.logger.error("Connectivity test failed: %s", str(e))
@@ -257,9 +258,12 @@ class VCOMAPIClient:
                    system_key: str = None, **kwargs) -> List[Dict[str, Any]]:
         """Return tickets using optional filters."""
         params = {}
-        if status: params['status'] = status
-        if priority: params['priority'] = priority  
-        if system_key: params['systemKey'] = system_key
+        if status:
+            params['status'] = status
+        if priority:
+            params['priority'] = priority  
+        if system_key:
+            params['systemKey'] = system_key
         params.update(kwargs)
         
         response = self._make_request('GET', '/tickets', params=params)

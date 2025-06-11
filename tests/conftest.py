@@ -3,9 +3,10 @@ import logging
 import sys
 from pathlib import Path
 import pytest
+from src.vysync.vcom_client import VCOMAPIClient
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from vcom_client import VCOMAPIClient
+
 
 REQUIRED_VARS = ("VCOM_API_KEY", "VCOM_USERNAME", "VCOM_PASSWORD")
 
