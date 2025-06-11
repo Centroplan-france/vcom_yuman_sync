@@ -1,6 +1,5 @@
 """Initialise the Postgres schema for the sync utilities."""
 
-import logging
 import os
 from typing import List
 
@@ -8,6 +7,7 @@ import requests
 from sqlalchemy import text
 from sqlmodel import SQLModel
 
+from src.vysync.yuman_client import YumanClient
 from src.vysync.logging import init_logger
 
 # Register models so SQLModel is aware of them
@@ -60,7 +60,6 @@ def create_tables() -> None:
 
     logger.info("Tables ensured and constraints applied.")
 
-from yuman_client import YumanClient
 yc = YumanClient(os.getenv("YUMAN_TOKEN"))
 cats = yc.get_material_categories()  # à implémenter très simple -> GET /materials/categories
 with engine.begin() as conn:
