@@ -22,6 +22,9 @@ jobs:
 
       - name: Install dependencies
         run: poetry install --no-root
+        
+      - name: Set SQLite DATABASE_URL for tests
+        run: echo "DATABASE_URL=sqlite:///./test.db" >> $GITHUB_ENV
 
       - name: Ruff
         run: poetry run ruff check .
