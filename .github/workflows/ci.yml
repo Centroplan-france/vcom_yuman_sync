@@ -4,18 +4,27 @@ on: [push, pull_request]
 jobs:
   checks:
     runs-on: ubuntu-latest
+    env:               # ← section commune à tout le job
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      VCOM_API_KEY: ${{ secrets.VCOM_API_KEY }}
+      VCOM_USERNAME: ${{ secrets.VCOM_USERNAME }}
+      VCOM_PASSWORD: ${{ secrets.VCOM_PASSWORD }}
+      YUMAN_TOKEN:   ${{ secrets.YUMAN_TOKEN }}
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
+        with:
+          python-version: "3.11"
 
       - name: Install Poetry
         run: pip install poetry
 
-      - name: Install deps
+      - name: Install dependencies
         run: poetry install --no-root
 
-      - name: Lint & unit tests
-        run: |
-          make lint
-          make test
+      - name: Ruff
+        run: poetry run ruff check .
+
+      - name: Unit tests
+        run: poetry run pytest -q
