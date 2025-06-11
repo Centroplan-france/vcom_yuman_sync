@@ -9,7 +9,6 @@ from typing import List
 
 from sqlalchemy import text
 from sqlmodel import SQLModel
-from datetime import datetime 
 
 from vysync.db import engine
 from vysync.logging import init_logger
