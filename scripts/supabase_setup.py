@@ -48,9 +48,32 @@ def ensure_schema() -> None:
     with engine.begin() as conn:
         conn.execute(text("SET search_path TO public"))
         SQLModel.metadata.create_all(conn)
+        # ---------------------------------------------------------------
+        # Sites : rendre la colonne nullable + colonnes custom + index
+        # ---------------------------------------------------------------
+        conn.execute(text("""
+            ALTER TABLE sites_mapping
+                ALTER COLUMN vcom_system_key DROP NOT NULL,
+                ALTER COLUMN yuman_site_id DROP NOT NULL;
+
+            ALTER TABLE sites_mapping
+                ADD COLUMN IF NOT EXISTS aldi_id text,
+                ADD COLUMN IF NOT EXISTS aldi_store_id text,
+                ADD COLUMN IF NOT EXISTS project_number_cp text,
+                ADD COLUMN IF NOT EXISTS ignore_site boolean
+                    DEFAULT false;
+
+            CREATE UNIQUE INDEX IF NOT EXISTS uniq_vcom_system_key
+                ON sites_mapping (vcom_system_key)
+                WHERE vcom_system_key IS NOT NULL;
+                          
+            CREATE UNIQUE INDEX IF NOT EXISTS uniq_yuman_site_id
+                ON sites_mapping (yuman_site_id)
+                WHERE yuman_site_id IS NOT NULL;
+        """))
+
 
         _add_constraint(conn, "tickets_mapping", "vcom_ticket_id", "uniq_vcom_ticket")
-        _add_constraint(conn, "sites_mapping", "vcom_system_key", "uniq_system_key")
 
     logger.info("Schema ensured and constraints applied.")
 

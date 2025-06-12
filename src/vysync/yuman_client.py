@@ -39,7 +39,10 @@ class YumanClient:  # pylint: disable=too-many-public-methods
 
         self.per_page = min(per_page, 200)
         self.max_retry = max_retry
-        self.backoff = backoff
+        self.backoff = backoff    
+        # throttle : 3,3 req/s  (quota Yuman = 4 req/s)
+        self._last_call = 0.0
+        self.min_interval = 0.27  # en secondes
 
         self.session = requests.Session()
         self.session.headers.update(
@@ -58,13 +61,26 @@ class YumanClient:  # pylint: disable=too-many-public-methods
         endpoint = endpoint.lstrip("/")
         return f"{self.base_url}/{endpoint}"
 
-    def _request(self, method: str, endpoint: str, **kwargs: Any) -> Response:  # noqa: ANN401
+    def _request(self, method: str, endpoint: str, **kwargs: Any) -> Response:
+        # ------------------------------------------------------------------
+        # Throttle : 3,3 req/s  → 0,30 s mini entre deux appels
+        # ------------------------------------------------------------------
+        elapsed = time.time() - self._last_call
+        if elapsed < self.min_interval:
+            time.sleep(self.min_interval - elapsed)
+
         url = self._build_url(endpoint)
         attempt = 0
+
         while True:
             attempt += 1
             try:
-                resp: Response = self.session.request(method, url, timeout=30, **kwargs)
+                resp: Response = self.session.request(
+                    method,
+                    url,
+                    timeout=30,
+                    **kwargs,
+                )
             except requests.RequestException as exc:  # network error, DNS, etc.
                 if attempt > self.max_retry:
                     raise YumanClientError("Network error") from exc
@@ -83,25 +99,43 @@ class YumanClient:  # pylint: disable=too-many-public-methods
 
             if resp.status_code >= 400:
                 raise YumanClientError(f"{method} {url} → {resp.status_code}: {resp.text}")
+
+            # appel réussi → on met à jour le timestamp pour le prochain throttle
+            self._last_call = time.time()
             return resp
 
-    # GET with optional pagination
-    def _get(self, endpoint: str, *, params: Optional[Dict[str, Any]] = None, max_pages: Optional[int] = None) -> List[Dict[str, Any]]:  # noqa: D401, ANN401
+
+    # GET paginé – renvoie la liste concaténée de tous les items
+    def _get(self, endpoint: str, *, params: Optional[Dict[str, Any]] = None, max_pages: Optional[int] = None,) -> List[Dict[str, Any]]:
         params = params or {}
-        params.setdefault("per_page", self.per_page)
+        # Yuman attend « perPage » (camelCase)
+        params.setdefault("perPage", self.per_page)
+
         page = 1
         out: List[Dict[str, Any]] = []
+
         while True:
             params["page"] = page
             resp = self._request("GET", endpoint, params=params)
             data = resp.json()
-            items = data.get("items", [])
+
+            # Certains endpoints renvoient directement la liste
+            items = data.get("items") if isinstance(data, dict) else data
+            if items is None:
+                items = data
             out.extend(items)
-            total_pages = data.get("total_pages", 1)
+
+            total_pages = (
+                data.get("total_pages")
+                or data.get("totalPages")
+                or 1
+            )
             if page >= total_pages or (max_pages and page >= max_pages):
                 break
             page += 1
+
         return out
+
 
     def _post(self, endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:  # noqa: D401
         resp = self._request("POST", endpoint, json=payload)
@@ -131,11 +165,23 @@ class YumanClient:  # pylint: disable=too-many-public-methods
     # Sites
     # ------------------------------------------------------------------
 
-    def list_sites(self) -> List[Dict[str, Any]]:
-        return self._get("sites")
+    def list_sites(self, *, per_page: int = 100, since: Optional[str] = None, embed: Optional[str] = None,):
+        params = {"perPage": per_page}
+        if since:
+            params["updated_at_gte"] = since
+        if embed:
+            params["embed"] = embed
+        return self._iterate_pages("/sites", params)
 
-    def get_site(self, site_id: int) -> Dict[str, Any]:
-        return self._request("GET", f"sites/{site_id}").json()
+
+    def get_site(self, site_id: int, *, embed: Optional[str] = None):
+        params = {"embed": embed} if embed else None
+        return self._request("GET", f"/sites/{site_id}", params=params)
+
+    # alias pratique
+    def get_site_detailed(self, site_id: int, *, embed: str = "client,category,fields"):
+        return self.get_site(site_id, embed=embed)
+
 
     def create_site(self, data: Dict[str, Any]) -> Dict[str, Any]:
         return self._post("sites", data)
@@ -147,11 +193,24 @@ class YumanClient:  # pylint: disable=too-many-public-methods
     # Materials (equipments)
     # ------------------------------------------------------------------
 
-    def list_materials(self) -> List[Dict[str, Any]]:
-        return self._get("materials")
+    def list_materials(self, *, category_id: Optional[int] = None, per_page: int = 100, since: Optional[str] = None, embed: Optional[str] = None,):
+        params = {"perPage": per_page}
+        if category_id:
+            params["category_id"] = category_id
+        if since:
+            params["updated_at_gte"] = since
+        if embed:
+            params["embed"] = embed
+        return self._iterate_pages("/materials", params)
 
-    def get_material(self, material_id: int) -> Dict[str, Any]:
-        return self._request("GET", f"materials/{material_id}").json()
+
+    def get_material(self, material_id: int, *, embed: Optional[str] = None):
+        params = {"embed": embed} if embed else None
+        return self._request("GET", f"/materials/{material_id}", params=params)
+
+    def get_material_detailed(self, material_id: int):
+        return self.get_material(material_id)
+
 
     def create_material(self, data: Dict[str, Any]) -> Dict[str, Any]:
         return self._post("materials", data)
@@ -193,3 +252,9 @@ class YumanClient:  # pylint: disable=too-many-public-methods
         except YumanClientError as exc:
             logger.warning("Yuman healthcheck failed: %s", exc)
             return False
+        
+    def get_category_id(self, name: str) -> Optional[int]:
+        for cat in self._get("/materials/categories"):
+            if cat.get("name") == name:
+                return cat["id"]
+        return None

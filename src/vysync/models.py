@@ -81,8 +81,14 @@ class Site(SQLModel, table=True):
     __tablename__ = "sites_mapping"
 
     id: int = Field(primary_key=True)
-    yuman_site_id: int = Field(unique=True, index=True, nullable=False)
-    vcom_system_key: str = Field(unique=True, index=True, nullable=False)
+    yuman_site_id: int = Field(default=None, unique=True, index=True, nullable=True)
+    vcom_system_key: Optional[str] = Field(default=None, unique=True, index=True, nullable=True)
+    # --- Champs custom Yuman -------------------------------------------------
+    aldi_id: Optional[str] = Field(default=None, index=True)
+    aldi_store_id: Optional[str] = Field(default=None, index=True)
+    project_number_cp: Optional[str] = Field(default=None, index=True)
+
+
 
     client_map_id: int = Field(foreign_key="clients_mapping.id", nullable=False)
     code: Optional[str] = None
