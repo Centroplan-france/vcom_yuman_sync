@@ -20,7 +20,6 @@ from typing import Any, Dict, List, Tuple
 from supabase import Client as SupabaseClient, create_client
 
 from yuman_client import YumanClient  # ← shared wrapper
-from models import Site  # type: ignore – SQLModel ORM
 
 # ---------------------------------------------------------------------------
 # Constants
