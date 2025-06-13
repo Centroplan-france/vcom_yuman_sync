@@ -2,6 +2,7 @@ import random
 import string
 import pytest
 from src.vysync.db import supabase, sb_upsert
+from postgrest.exceptions import APIError
 
 pytestmark = pytest.mark.skipif(
     supabase is None, reason="Supabase client not initialised (env vars missing)"
@@ -19,18 +20,25 @@ def test_sb_upsert_roundtrip(tmp_path):
     """
     table = "tmp_upsert_test"
 
+
     # 1. create temp table if not exists
-    supabase.rpc(
-        "execute_sql",
-        {
-            "sql": f"""
-            CREATE TABLE IF NOT EXISTS {table}(
-                code text PRIMARY KEY,
-                value int
-            );
-        """
-        },
-    ).execute()
+    try:
+        supabase.rpc(
+            "execute_sql",
+            {
+                "sql": f"""
+                CREATE TABLE IF NOT EXISTS {table}(
+                    code text PRIMARY KEY,
+                    value int
+                );
+            """
+            },
+        ).execute()
+    except APIError as exc:
+        # Function not exposed ⇒ skip the test in this environment
+        if exc.code == "PGRST106":
+            pytest.skip("execute_sql RPC not exposed in this Supabase project")
+        raise
 
     # 2. upsert row
     row1 = {"code": random_code(), "value": 1}

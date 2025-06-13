@@ -11,7 +11,7 @@ from sqlalchemy import text
 from sqlmodel import SQLModel
 
 from vysync.db import engine
-from vysync.logging import init_logger
+from vysync.app_logging import init_logger
 from vysync.yuman_client import YumanClient
 
 logger = init_logger(__name__)
@@ -62,14 +62,41 @@ def ensure_schema() -> None:
                 ADD COLUMN IF NOT EXISTS project_number_cp text,
                 ADD COLUMN IF NOT EXISTS ignore_site boolean
                     DEFAULT false;
+            ---------------------------------------------------------------
+            -- Equipments : colonne count pour les modules
+            ---------------------------------------------------------------
+            ALTER TABLE equipments_mapping
+                ADD COLUMN IF NOT EXISTS count integer;
 
+            ---------------------------------------------------------------
+            -- (Facultatif) rendre client_map_id nullable pour les sites VCOM
+            ---------------------------------------------------------------
+            ALTER TABLE sites_mapping
+                ALTER COLUMN client_map_id DROP NOT NULL;
+
+
+            -- drop de l'ancien index partiel s'il existe
+            DROP INDEX IF EXISTS uniq_vcom_system_key;
+
+            -- nouvel index UNIQUE complet
             CREATE UNIQUE INDEX IF NOT EXISTS uniq_vcom_system_key
-                ON sites_mapping (vcom_system_key)
-                WHERE vcom_system_key IS NOT NULL;
+                ON sites_mapping (vcom_system_key);
                           
-            CREATE UNIQUE INDEX IF NOT EXISTS uniq_yuman_site_id
-                ON sites_mapping (yuman_site_id)
-                WHERE yuman_site_id IS NOT NULL;
+            -- ----------------------------------------------------------------
+            -- Création de la table conflicts si elle n'existe pas
+            -- ----------------------------------------------------------------
+            CREATE TABLE IF NOT EXISTS conflicts (
+            id SERIAL PRIMARY KEY,
+            entity TEXT NOT NULL,
+            yuman_site_id INTEGER NOT NULL,
+            issue TEXT NOT NULL,
+            created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL
+            );
+
+            -- Index partiel pour éviter doublons sur (yuman_site_id, issue)
+            CREATE UNIQUE INDEX IF NOT EXISTS uniq_conflicts_site_issue
+            ON conflicts (yuman_site_id, issue);
+
         """))
 
 

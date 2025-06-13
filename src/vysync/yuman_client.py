@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 from requests import Response
-from .logging import init_logger
+from .app_logging import init_logger
 logger = init_logger(__name__)
 
 DEFAULT_PER_PAGE = 100  # Yuman accepts up to 200
@@ -44,6 +44,11 @@ class YumanClient:  # pylint: disable=too-many-public-methods
         self._last_call = 0.0
         self.min_interval = 0.27  # en secondes
 
+        # quota minute Yuman (60 req/min)
+        self._minute_start = time.time()
+        self._req_count_minute = 0
+        self.max_per_minute = 60
+
         self.session = requests.Session()
         self.session.headers.update(
             {
@@ -62,6 +67,26 @@ class YumanClient:  # pylint: disable=too-many-public-methods
         return f"{self.base_url}/{endpoint}"
 
     def _request(self, method: str, endpoint: str, **kwargs: Any) -> Response:
+
+        # --------------------------------------------------
+        # Minute-level rate-limit  (60 req/min)
+        # --------------------------------------------------
+        now = time.time()
+        # reset window every 60s
+        if now - self._minute_start >= 60:
+            self._minute_start = now
+            self._req_count_minute = 0
+        # if we've hit the per-minute quota, wait out the window
+        elif self._req_count_minute >= self.max_per_minute:
+            to_sleep = 60 - (now - self._minute_start)
+            logger.info("Minute quota reached — sleeping %.1fs", to_sleep)
+            time.sleep(to_sleep)
+            self._minute_start = time.time()
+            self._req_count_minute = 0
+        # count this attempt
+        self._req_count_minute += 1
+        # --------------------------------------------------
+
         # ------------------------------------------------------------------
         # Throttle : 3,3 req/s  → 0,30 s mini entre deux appels
         # ------------------------------------------------------------------
@@ -165,18 +190,20 @@ class YumanClient:  # pylint: disable=too-many-public-methods
     # Sites
     # ------------------------------------------------------------------
 
-    def list_sites(self, *, per_page: int = 100, since: Optional[str] = None, embed: Optional[str] = None,):
-        params = {"perPage": per_page}
+    def list_sites(self, *, per_page: int = DEFAULT_PER_PAGE, since: Optional[str] = None, embed: Optional[str] = None,) -> List[Dict[str, Any]]:
+        params: Dict[str, Any] = {"perPage": per_page}
         if since:
             params["updated_at_gte"] = since
         if embed:
             params["embed"] = embed
-        return self._iterate_pages("/sites", params)
+        return self._get("sites", params=params)
+
 
 
     def get_site(self, site_id: int, *, embed: Optional[str] = None):
         params = {"embed": embed} if embed else None
-        return self._request("GET", f"/sites/{site_id}", params=params)
+        resp = self._request("GET", f"/sites/{site_id}", params=params)
+        return resp.json()
 
     # alias pratique
     def get_site_detailed(self, site_id: int, *, embed: str = "client,category,fields"):
@@ -193,20 +220,24 @@ class YumanClient:  # pylint: disable=too-many-public-methods
     # Materials (equipments)
     # ------------------------------------------------------------------
 
-    def list_materials(self, *, category_id: Optional[int] = None, per_page: int = 100, since: Optional[str] = None, embed: Optional[str] = None,):
-        params = {"perPage": per_page}
+    def list_materials(self, *, category_id: Optional[int] = None, per_page: int = DEFAULT_PER_PAGE,
+        since: Optional[str] = None, embed: Optional[str] = None,) -> List[Dict[str, Any]]:
+
+        params: Dict[str, Any] = {"perPage": per_page}
         if category_id:
             params["category_id"] = category_id
         if since:
             params["updated_at_gte"] = since
         if embed:
             params["embed"] = embed
-        return self._iterate_pages("/materials", params)
+        return self._get("materials", params=params)
+
 
 
     def get_material(self, material_id: int, *, embed: Optional[str] = None):
         params = {"embed": embed} if embed else None
-        return self._request("GET", f"/materials/{material_id}", params=params)
+        resp = self._request("GET", f"/materials/{material_id}", params=params)
+        return resp.json()
 
     def get_material_detailed(self, material_id: int):
         return self.get_material(material_id)
@@ -221,9 +252,12 @@ class YumanClient:  # pylint: disable=too-many-public-methods
     # ------------------------------------------------------------------
     # Categories
     # ------------------------------------------------------------------
-    def get_material_categories(self) -> List[Dict[str, Any]]:
-        """Return equipment categories (id, name) from Yuman."""
-        return self._get("materials/categories")
+    def get_category_id(self, name: str) -> Optional[int]:
+        for cat in self._get("materials/categories"):
+            if cat.get("name") == name:
+                return cat["id"]
+        return None
+
 
     # ------------------------------------------------------------------
     # Workorders

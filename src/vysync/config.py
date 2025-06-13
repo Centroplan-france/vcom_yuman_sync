@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Dict, Any
 
-from .logging import init_logger
+from .app_logging import init_logger
 logger = init_logger(__name__)
 
 # Load environment variables from a .env file if present

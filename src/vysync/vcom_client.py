@@ -4,7 +4,7 @@
 import requests
 import time
 import logging
-from .logging import init_logger
+from .app_logging import init_logger
 from typing import Dict, List, Any
 import os
 

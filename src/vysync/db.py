@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 from supabase import create_client, Client as SupabaseClient
 
 
-from .logging import init_logger
+from .app_logging import init_logger
 logger = init_logger(__name__)
 
 load_dotenv()
@@ -57,7 +57,7 @@ def sb_upsert(
         .upsert(rows, on_conflict=on_conflict, ignore_duplicates=ignore_duplicates)
         .execute()
     )
-    logger.debug("Upsert %s: inserted=%s, updated=%s", table, resp.count, resp.status_code)
+    logger.debug("Upsert %s OK – rows sent: %s", table, len(rows))
 
 
 __all__ = ["engine"]
