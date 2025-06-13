@@ -249,15 +249,6 @@ class YumanClient:  # pylint: disable=too-many-public-methods
     def update_material(self, material_id: int, patch: Dict[str, Any]) -> Dict[str, Any]:
         return self._patch(f"materials/{material_id}", patch)
     
-    # ------------------------------------------------------------------
-    # Categories
-    # ------------------------------------------------------------------
-    def get_category_id(self, name: str) -> Optional[int]:
-        for cat in self._get("materials/categories"):
-            if cat.get("name") == name:
-                return cat["id"]
-        return None
-
 
     # ------------------------------------------------------------------
     # Workorders

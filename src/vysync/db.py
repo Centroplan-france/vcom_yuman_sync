@@ -52,11 +52,11 @@ def sb_upsert(
     if supabase is None:
         raise RuntimeError("Supabase client unavailable")
 
-    resp = (
-        supabase.table(table)
-        .upsert(rows, on_conflict=on_conflict, ignore_duplicates=ignore_duplicates)
-        .execute()
-    )
+    # resp = (
+    #     supabase.table(table)
+    #     .upsert(rows, on_conflict=on_conflict, ignore_duplicates=ignore_duplicates)
+    #     .execute()
+    # )
     logger.debug("Upsert %s OK – rows sent: %s", table, len(rows))
 
 

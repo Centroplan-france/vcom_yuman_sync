@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, UTC
-import os
 import sys
 from typing import Any, Dict, List
 from vysync.vcom_client import VCOMAPIClient
