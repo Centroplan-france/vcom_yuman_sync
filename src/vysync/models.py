@@ -29,7 +29,8 @@ class Source(str, enum.Enum):
 
     vcom = "vcom"
     yuman = "yuman"
-    scheduler = "scheduler"
+    auto = "auto"
+    user = "user"
 
 
 # ---------------------------------------------------------------------------

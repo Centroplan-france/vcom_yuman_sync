@@ -32,7 +32,7 @@ cat_lookup = {
                .data
 }
 INVERTER_CAT_ID = cat_lookup.get("Onduleur")    # ou int fixe si connu
-MODULES_CAT_ID  = cat_lookup.get("Modules")     # adapte au besoin
+MODULES_CAT_ID  = 11103    
 
 
 # ---------------------------------------------------------------------------
