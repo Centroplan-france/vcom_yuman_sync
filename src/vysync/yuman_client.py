@@ -123,6 +123,16 @@ class YumanClient:  # pylint: disable=too-many-public-methods
                 continue
 
             if resp.status_code >= 400:
+                # — log complet pour debug avant de lever l’erreur
+                logger.error(
+                    "Yuman %s %s → %s\nHeaders: %s\nPayload: %s\nResponse: %s",
+                    method,
+                    url,
+                    resp.status_code,
+                    dict(resp.headers),
+                    kwargs.get("json") or kwargs.get("params"),
+                    resp.text,
+                )
                 raise YumanClientError(f"{method} {url} → {resp.status_code}: {resp.text}")
 
             # appel réussi → on met à jour le timestamp pour le prochain throttle

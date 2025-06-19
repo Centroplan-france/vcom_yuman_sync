@@ -149,7 +149,9 @@ def _insert_vcom_site(sb: SupabaseClient, vc: VCOMAPIClient, sys_data: Dict) -> 
         "site_area": tech.get("siteArea"),
         "created_at": now_iso(),
     }
-    res = sb.table("sites_mapping").insert(site_payload).execute()
+    res = sb.table("sites_mapping")\
+            .upsert(site_payload, on_conflict="vcom_system_key")\
+            .execute()
     site_db_id = res.data[0]["id"]
 
     # Equipement Modules
@@ -160,6 +162,7 @@ def _insert_vcom_site(sb: SupabaseClient, vc: VCOMAPIClient, sys_data: Dict) -> 
             "vcom_device_id":    f"MODULES-{vcom_key}",
             "yuman_material_id": None,           # sera lié plus tard
             "category_id":       CAT_MODULE,
+            "eq_type": "module",
             "brand":             p.get("vendor"),    # colonne brand
             "model":             p.get("model"),
             "name":              p.get("model"),     # nom obligatoire
@@ -186,6 +189,7 @@ def _insert_vcom_site(sb: SupabaseClient, vc: VCOMAPIClient, sys_data: Dict) -> 
             "vcom_device_id":    inv["id"],
             "yuman_material_id": None,
             "category_id":       CAT_INVERTER,
+            "eq_type": "inverter", 
             "brand":             details.get("vendor"),
             "model":             details.get("model"),
             "name":              inv.get("name"),     # nom fourni par VCOM
@@ -195,7 +199,7 @@ def _insert_vcom_site(sb: SupabaseClient, vc: VCOMAPIClient, sys_data: Dict) -> 
             "created_at":        now_iso(),
         })
     if inv_rows:
-        sb.table("equipments_mapping").insert(inv_rows).execute()
+        sb_upsert(EQUIP_TABLE, inv_rows, sb, "vcom_device_id")
 
 
     # Log
@@ -248,6 +252,7 @@ def sync_clients(yc: YumanClient, sb: SupabaseClient, dry: bool = False) -> int:
 def sync_sites(yc: YumanClient, sb: SupabaseClient, dry: bool = False) -> Tuple[int, int]:
     existing = sb.table(SITE_TABLE).select("*").execute().data
     by_vcom = {s["vcom_system_key"]: s for s in existing if s.get("vcom_system_key")}
+    by_yuman_id  = {s["yuman_site_id"]:   s for s in existing if s.get("yuman_site_id")}
     clients = sb.table(CLIENT_TABLE).select("id,yuman_client_id").execute().data
     client_map = {c["yuman_client_id"]: c["id"] for c in clients}
 
@@ -274,14 +279,18 @@ def sync_sites(yc: YumanClient, sb: SupabaseClient, dry: bool = False) -> Tuple[
             if patch:
                 sb.table(SITE_TABLE).update(patch).eq("vcom_system_key", row["vcom_system_key"]).execute()
         else:
-            (inserted if row.get("vcom_system_key") else upsert_yid).append(row)
-            if not row.get("vcom_system_key"):
-                conflicts.append({
-                    "entity": "site",
-                    "yuman_site_id": row["yuman_site_id"],
-                    "issue": "missing_vcom_system_key",
-                    "created_at": now_iso(),
-                })
+            db_row = by_yuman_id.get(row["yuman_site_id"])
+            if db_row:
+                # Le site existe déjà : on ne crée pas de doublon,
+                # on ne génère pas de conflit ; on complète juste les colonnes manquantes.
+                patch = {k: v for k, v in row.items() if v and not db_row.get(k)}
+                if patch:
+                    sb.table(SITE_TABLE).update(patch)\
+                                        .eq("yuman_site_id", row["yuman_site_id"]).execute()
+            else:
+                (inserted if row.get("vcom_system_key") else upsert_yid).append(row)
+                if not row.get("vcom_system_key"):
+                    conflicts.append({...})
 
     sb_upsert(SITE_TABLE, inserted, sb, "vcom_system_key", dry)
     sb_upsert(SITE_TABLE, upsert_yid, sb, "yuman_site_id", dry)
@@ -290,28 +299,34 @@ def sync_sites(yc: YumanClient, sb: SupabaseClient, dry: bool = False) -> Tuple[
 
 
 def sync_equipments(yc: YumanClient, sb: SupabaseClient, dry: bool = False) -> int:
+    # --- 0. Pré‐requis ----------------------------------------------------------------
     sites = sb.table(SITE_TABLE).select("id,yuman_site_id,vcom_system_key").execute().data
     yid_to_pk = {s["yuman_site_id"]: s["id"] for s in sites}
     with_vcom    = {s["yuman_site_id"] for s in sites if s.get("vcom_system_key")}
     without_vcom = {s["yuman_site_id"] for s in sites if not s.get("vcom_system_key")}
 
-    existing = sb.table(EQUIP_TABLE)\
-                 .select("id,site_id,category_id,vcom_device_id,yuman_material_id")\
-                 .in_("category_id", list(ALLOWED_EQUIP_CATEGORIES))\
-                 .execute().data
+    existing = (
+        sb.table(EQUIP_TABLE)
+          .select("id,site_id,category_id,vcom_device_id,yuman_material_id")
+          .in_("category_id", list(ALLOWED_EQUIP_CATEGORIES))
+          .execute().data
+    )
     inv_lookup = {(r["site_id"], r.get("vcom_device_id")): r for r in existing if r["category_id"] == CAT_INVERTER}
     mod_lookup = {r["site_id"]: r for r in existing if r["category_id"] == CAT_MODULE}
 
-    inserts, patches, field_rows = [], [], {}
+    inserts, patches, pending_fv = [], [], {}
+
+    # --- 1. Parcours Yuman --------------------------------------------------------------
     for cat in ALLOWED_EQUIP_CATEGORIES:
         for eq in yc.list_materials(category_id=cat, embed="fields,site,category"):
-            y_site = eq.get("site_id")
-            pk_site = yid_to_pk.get(y_site)
+            y_site   = eq.get("site_id")
+            pk_site  = yid_to_pk.get(y_site)
             if pk_site is None:
                 continue
+
             fields = eq.get("_embed", {}).get("fields", [])
 
-            # --- Si site déjà mappé à VCOM ----------------------------------
+            # 1-A. Site déjà mappé VCOM → patch éventuel
             if y_site in with_vcom:
                 key = (pk_site, next((f["value"] for f in fields if f["name"] == CUSTOM_FIELD_INVERTER_ID), None)) \
                       if cat == CAT_INVERTER else pk_site
@@ -320,41 +335,65 @@ def sync_equipments(yc: YumanClient, sb: SupabaseClient, dry: bool = False) -> i
                     patches.append({"id": row["id"], "yuman_material_id": eq["id"]})
                 continue
 
-            # --- Si site n’a pas encore de vcom_system_key ------------------
+            # 1-B. Site uniquement Yuman → insert (mapping provisoire sans vcom)
             if y_site not in without_vcom:
                 continue
             inserts.append({
                 "yuman_material_id": eq["id"],
-                "site_id": pk_site,
-                "category_id": cat,
-                "name": eq.get("name"),
-                "brand": eq.get("brand"),
-                "model": eq.get("model"),
-                "serial_number": eq.get("serial_number"),
-                "created_at": eq.get("created_at") or now_iso(),
-                "vcom_device_id": next((f["value"] for f in fields if f["name"] == CUSTOM_FIELD_INVERTER_ID), None),
+                "site_id":          pk_site,
+                "category_id":      cat,
+                "name":             eq.get("name"),
+                "brand":            eq.get("brand"),
+                "model":            eq.get("model"),
+                "serial_number":    eq.get("serial_number"),
+                "created_at":       eq.get("created_at") or now_iso(),
+                "vcom_device_id":   next((f["value"] for f in fields if f["name"] == CUSTOM_FIELD_INVERTER_ID), None),
             })
-            # champs custom → table field_values
+
+            # Stocke en attente les field values (sera remappé après insert)
             for f in fields:
-                field_rows[(eq["id"], f["name"])] = {
-                    "equipment_id": eq["id"],
-                    "field_name": f["name"],
-                    "value": f.get("value"),
-                    "created_at": now_iso(),
+                pending_fv[(eq["id"], f["name"])] = {
+                    "equipment_id": eq["id"],          # provisoire, sera remplacé par PK DB
+                    "field_name":   f["name"],
+                    "value":        f.get("value"),
+                    "created_at":   now_iso(),
                 }
 
+    # --- 2. Upsert équipements (insert + patch) ----------------------------------------
     sb_upsert(EQUIP_TABLE, inserts, sb, "yuman_material_id", dry)
 
     if not dry:
         existing_ids = {r["yuman_material_id"] for r in existing if r.get("yuman_material_id")}
         for p in patches:
             if p["yuman_material_id"] in existing_ids:
-                continue  # doublon – on ignore
-            sb.table(EQUIP_TABLE).update({"yuman_material_id": p["yuman_material_id"]}).eq("id", p["id"]).execute()
+                continue
+            sb.table(EQUIP_TABLE)\
+              .update({"yuman_material_id": p["yuman_material_id"]})\
+              .eq("id", p["id"]).execute()
             existing_ids.add(p["yuman_material_id"])
 
-    sb_upsert(FIELD_VALUES_TABLE, list(field_rows.values()), sb, "equipment_id,field_name", dry)
+    # --- 3. Remap field_values vers la PK DB -------------------------------------------
+    if not dry and pending_fv:
+        yuman_ids = [ymid for (ymid, _) in pending_fv.keys()]
+        rows = (
+            sb.table(EQUIP_TABLE)
+              .select("id,yuman_material_id")
+              .in_("yuman_material_id", yuman_ids)
+              .execute().data or []
+        )
+        y2db = {r["yuman_material_id"]: r["id"] for r in rows}
+
+        fv_rows = []
+        for (ym_id, fname), payload in pending_fv.items():
+            db_id = y2db.get(ym_id)
+            if db_id:
+                payload["equipment_id"] = db_id
+                fv_rows.append(payload)
+
+        sb_upsert(FIELD_VALUES_TABLE, fv_rows, sb, "equipment_id,field_name", dry)
+
     return len(inserts) + len(patches)
+
 
 
 # ───────────────────────── Phase 3 : Détecter conflits de site
@@ -437,7 +476,7 @@ def prompt_user_mapping(conflicts: Dict[str, List[Dict]]) -> Dict[str, str]:
 
 # ───────────────────────── Phase 5 : Résolution des conflits de site
 
-def resolve_site_conflicts(sb: SupabaseClient, mapping: Dict[str, str]) -> None:
+def resolve_site_conflicts(sb: SupabaseClient, yc: YumanClient, mapping: Dict[str, str]) -> None:
     if not mapping:
         logger.info("[CONFLICT] Pas de conflit à résoudre.")
         return
@@ -475,7 +514,7 @@ def resolve_site_conflicts(sb: SupabaseClient, mapping: Dict[str, str]) -> None:
         if not row_v or not row_y:
             logger.warning("[CONFLICT] Impossible de récupérer lignes pour mapping %s = %s", key1, action)
             continue
-        _merge_sites(sb, row_v, row_y)
+        _merge_sites(sb, yc, row_v, row_y)
 
     logger.info("[CONFLICT] Résolution terminée")
 
@@ -509,13 +548,13 @@ def _ignore_site(sb: SupabaseClient, row: Dict) -> None:
 
 
 
-def _merge_sites(sb: SupabaseClient, v_row: Dict, y_row: Dict) -> None:
+def _merge_sites(sb: SupabaseClient, yc, v_row: Dict, y_row: Dict) -> None:
     """Master = VCOM line (v_row). Copy info from y_row then delete y_row."""
     logger.info("[MERGE] Fusion site VCOM id=%d ⇐ Yuman id=%d", v_row["id"], y_row["id"])
 
     # 1. Prépare les champs à déporter (on retire yuman_site_id pour l'instant)
     update_fields, pending_yuman_id = {}, None
-    for col in ("yuman_site_id", "client_map_id", "latitude", "longitude", "address", "commission_date"):
+    for col in ("yuman_site_id", "client_map_id", "aldi_id", "aldi_store_id", "project_number_cp"):
         if not v_row.get(col) and y_row.get(col):
             if col == "yuman_site_id":
                 pending_yuman_id = y_row[col]
@@ -533,7 +572,26 @@ def _merge_sites(sb: SupabaseClient, v_row: Dict, y_row: Dict) -> None:
         sb.table("sites_mapping").update(update_fields).eq("id", v_row["id"]).execute()
     if pending_yuman_id:
         sb.table("sites_mapping").update({"yuman_site_id": pending_yuman_id}).eq("id", v_row["id"]).execute()
-
+    
+    # stocke la clé VCOM dans les custom fields du site Yuman
+    try:
+        yc.update_site(
+            pending_yuman_id,
+            {
+                "fields": [
+                    {
+                        "blueprint_id": 4,
+                        "name":         "System Key (Vcom ID)",
+                        "value":        v_row["vcom_system_key"],
+                    }
+                ]
+            },
+        )
+    except Exception as e:
+        logger.warning(
+            "[YUMAN] Impossible de poser la VCOM key %s sur site %s : %s",
+            v_row["vcom_system_key"], pending_yuman_id, e,
+        )
     #  Marquer le conflit « missing_vcom_system_key » comme résolu
     if y_row.get("yuman_site_id"):
         sb.table(CONFLICT_TABLE)\
@@ -569,17 +627,28 @@ def _cleanup_equipment_after_merge(sb: SupabaseClient, site_id: int) -> None:
           or []
     )
     if len(mods) > 1:
-        # Garde la ligne issue de VCOM (celle qui a un vcom_device_id)
         keep = next((m for m in mods if m.get("vcom_device_id")), mods[0])
         drop = next((m for m in mods if m["id"] != keep["id"]), None)
         if drop:
-            # Copie éventuel yuman_material_id
+            # 1️ Libère la clé unique avant de copier
+            #    mais d'abord on déplace les field_values
+            sb.table(FIELD_VALUES_TABLE)\
+              .update({"equipment_id": keep["id"]})\
+              .eq("equipment_id", drop["id"]).execute()
+            if drop.get("yuman_material_id"):
+                sb.table(EQUIP_TABLE)\
+                .update({"yuman_material_id": None})\
+                .eq("id", drop["id"]).execute()
+
+            # 2️ Copie dans keep si absent
             if not keep.get("yuman_material_id") and drop.get("yuman_material_id"):
                 sb.table(EQUIP_TABLE)\
-                  .update({"yuman_material_id": drop["yuman_material_id"]})\
-                  .eq("id", keep["id"]).execute()
-            # Supprime la ligne redondante
+                .update({"yuman_material_id": drop["yuman_material_id"]})\
+                .eq("id", keep["id"]).execute()
+
+            # 3️ Supprime la ligne redondante
             sb.table(EQUIP_TABLE).delete().eq("id", drop["id"]).execute()
+
             sb.table("sync_logs").insert({
                 "source": "auto",
                 "action": "module_merge",
@@ -685,6 +754,13 @@ def resolve_clients_for_sites(sb: SupabaseClient, yc: YumanClient) -> None:
 
 
 # ───────────────────────── Phase 7 : Création des sites Yuman manquants
+def _clean_site_name(raw: str) -> str:
+    # supprime préfixe "00/01 ", "France", et la parenthèse finale
+    name = re.sub(r"^\d{2}\s+", "", raw)           # 01 (...)
+    name = re.sub(r"\s+France\s+", " ", name, flags=re.I)
+    name = re.sub(r"\s*\([^)]*\)\s*$", "", name)   # (Cestas)
+    return name.strip()
+
 
 def create_missing_yuman_sites(sb: SupabaseClient, yc: YumanClient) -> None:
     """Crée sur Yuman les sites VCOM encore sans yuman_site_id."""
@@ -709,13 +785,38 @@ def create_missing_yuman_sites(sb: SupabaseClient, yc: YumanClient) -> None:
         if not client_row:
             logger.warning("[YUMAN] Client map id=%d introuvable.", site["client_map_id"])
             continue
+        # --------- prépare les custom fields sous forme de tableau --------
+        fields_list: list[dict[str, Any]] = []
+        # 4 = System Key (Vcom ID)
+        fields_list.append({
+            "blueprint_id": 4,
+            "name":         "System Key (Vcom ID)",
+            "value":        site["vcom_system_key"],
+        })
+        # 5 = Nominal Power (kWc) si présent
+        if site.get("nominal_power") not in (None, ""):
+            fields_list.append({
+                "blueprint_id": 5,
+                "name":         "Nominal Power (kWc)",
+                "value":        site["nominal_power"],
+            })
+        # 6 = Commission Date si présent
+        if site.get("commission_date"):
+            fields_list.append({
+                "blueprint_id": 6,
+                "name":         "Commission Date",
+                "value":        site["commission_date"],
+            })
+
         payload = {
             "client_id": client_row["yuman_client_id"],
-            "name": site["name"],
-            "address": site.get("address") or "",
-            "latitude": site.get("latitude"),
-            "longitude": site.get("longitude"),
+            "name":      _clean_site_name(site["name"]),
+            "address":   site.get("address") or "",
+            "fields":    fields_list,
         }
+
+
+
         created_site = yc.create_site(payload)
         yuman_site_id = created_site["id"]
         sb.table("sites_mapping").update({"yuman_site_id": yuman_site_id}).eq("id", site["id"]).execute()
@@ -760,6 +861,8 @@ def _create_yuman_equipments(sb: SupabaseClient, yc: YumanClient,
           .eq("category_id", CAT_MODULE)
           .eq("vcom_device_id", f"MODULES-{site_row['vcom_system_key']}")
           .maybe_single()
+          .execute()
+          .data               # -> dict   ou None s’il n’y a pas de ligne
     )
 
     if mod_row:
@@ -785,7 +888,7 @@ def _create_yuman_equipments(sb: SupabaseClient, yc: YumanClient,
         sb.table(EQUIP_TABLE)
           .select("*")
           .eq("site_id", site_row["id"])
-          .eq("eq_type", "inverter")
+          .eq("category_id", CAT_INVERTER)   # ← catégorie plutôt qu’eq_type
           .execute()
           .data
           or []
@@ -822,10 +925,10 @@ def main():
 
     with execution_lock():
         sync_vcom_to_db(sb, vc)
-        #sync_yuman_to_db(sb, yc)
+        sync_yuman_to_db(sb, yc)
         conflicts = detect_site_conflicts(sb)
         mapping = prompt_user_mapping(conflicts)
-        resolve_site_conflicts(sb, mapping)
+        resolve_site_conflicts(sb, yc, mapping)
         resolve_clients_for_sites(sb, yc)
         create_missing_yuman_sites(sb, yc)
 
