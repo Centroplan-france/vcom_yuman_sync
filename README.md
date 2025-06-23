@@ -12,11 +12,17 @@ The project currently exposes a production ready VCOM client, a full test suite.
 
 ## Requirements
 
-- Python 3.9+
-- `requests` (see `requirements.txt`)
-- `python-dotenv` for loading environment variables from a `.env` file
+This project targets **Python 3.11** and uses [Poetry](https://python-poetry.org/) to
+manage dependencies. A `requirements.txt` file is also provided for `pip`
+installations.
 
-Install the dependencies with:
+Install everything with Poetry:
+
+```bash
+poetry install
+```
+
+Or using `pip`:
 
 ```bash
 pip install -r requirements.txt
@@ -30,6 +36,9 @@ These credentials must be available in your environment:
 - `VCOM_USERNAME` – VCOM account username
 - `VCOM_PASSWORD` – VCOM account password
 - `YUMAN_TOKEN` – API token for Yuman
+- `DATABASE_URL` – connection string for the local Postgres/Supabase database
+- `SUPABASE_URL` – optional Supabase project URL (for REST upserts)
+- `SUPABASE_SERVICE_KEY` – service key associated with the project
 - `LOG_LEVEL` – optional log verbosity (default `INFO`)
 
 You can export them manually or place them inside a local `.env` file. The
@@ -49,6 +58,9 @@ VCOM_API_KEY=your-key
 VCOM_USERNAME=your-user
 VCOM_PASSWORD=your-password
 YUMAN_TOKEN=your-token
+DATABASE_URL=postgresql://user:password@localhost/dbname
+SUPABASE_URL=https://xyzcompany.supabase.co
+SUPABASE_SERVICE_KEY=your-service-key
 ```
 
 ## Basic Usage
@@ -60,6 +72,20 @@ client = VCOMAPIClient()
 systems = client.get_systems()
 print(f"{len(systems)} systems found")
 ```
+
+## CLI Utilities
+
+Several helper scripts are included:
+
+- `scripts/supabase_setup.py` – initialise the database schema and import Yuman
+  equipment categories.
+- `vysync/sync_db_vcom_yuman.py` – synchronise sites and equipment between VCOM,
+  Yuman and the local database.
+- `vysync/sync_tickets_workorders.py` – keep VCOM tickets and Yuman work orders
+  in sync.
+
+All scripts load environment variables automatically, so ensure your `.env`
+file is correctly configured before running them.
 
 ## Tests
 
