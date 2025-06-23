@@ -196,33 +196,39 @@ def assign_tickets_to_active_workorders(
                 logger.error("Échec update ticket %s: %s", tid, exc)
 
 # ---------------------------------------------------------------------------
-# Étape 4 : créer des workorder_demands si besoin
-
-def create_workorder_demands_for_priority_sites(
-    sb, vc, yc, tickets: List[Dict[str, Any]], workorders: List[Dict[str, Any]], *, dry: bool = False
+# Étape 4 : créer des workorders « Open » pour les sites prioritaires sans WO actif
+def create_workorders_for_priority_sites(
+    sb,
+    vc,
+    yc,
+    tickets: List[Dict[str, Any]],
+    workorders: List[Dict[str, Any]],
+    *,
+    dry: bool = False,
 ) -> None:
     active_sites = {
         w["site_id"] for w in workorders if w.get("status", "").lower() != "closed"
     }
 
-    # Tickets urgent/high par site
+    # Tickets urgent/high regroupés par site
     by_site: Dict[int, List[Dict[str, Any]]] = {}
     for t in tickets:
         if t.get("status") == "open" and t.get("priority") in ("high", "urgent"):
-            res = (
+            row = (
                 sb.table("sites_mapping")
                 .select("yuman_site_id")
                 .eq("vcom_system_key", t.get("systemKey"))
                 .execute()
-            )
-            if res.data:
-                site_id = res.data[0]["yuman_site_id"]
+            ).data
+            if row:
+                site_id = row[0]["yuman_site_id"]
                 by_site.setdefault(site_id, []).append(t)
 
     for site_id, ts in by_site.items():
         if site_id in active_sites:
-            continue  # un WO actif existe déjà
+            continue  # déjà un WO actif
 
+        # ---------------- Construction du WO -----------------
         ts.sort(key=lambda x: {"urgent": 0, "high": 1}.get(x["priority"], 2))
         title = ts[0].get("designation") or ts[0]["id"]
         description = "\n".join(
@@ -230,54 +236,57 @@ def create_workorder_demands_for_priority_sites(
             for t in ts
         )
 
-         # --- récupérer le yuman_client_id ------------------------
-        res_cli = (
+        # ► Récupérer client_id + address depuis les tables de mapping
+        map_row = (
             sb.table("sites_mapping")
-              .select("client_map_id")
-              .eq("yuman_site_id", site_id)
-              .execute()
-        )
-        if not res_cli.data:
-            logger.error(
-                "❌ Pas de client_map_id pour site %s – demande non créée", site_id
-            )
+            .select("client_map_id", "address")
+            .eq("yuman_site_id", site_id)
+            .execute()
+        ).data
+        if not map_row:
+            logger.error("❌ Pas de mapping trouvé pour site %s – WO non créé", site_id)
             continue
 
-        client_map_id = res_cli.data[0]["client_map_id"]
-        res_cli2 = (
+        client_map_id, address = map_row[0]["client_map_id"], map_row[0]["address"]
+        if address in (None, ""):
+            logger.error("❌ Address manquante pour site %s – WO non créé", site_id)
+            continue
+
+        cli_row = (
             sb.table("clients_mapping")
-              .select("yuman_client_id")
-              .eq("id", client_map_id)
-              .execute()
-        )
-        if not res_cli2.data or res_cli2.data[0]["yuman_client_id"] is None:
+            .select("yuman_client_id")
+            .eq("id", client_map_id)
+            .execute()
+        ).data
+        if not cli_row or cli_row[0]["yuman_client_id"] is None:
             logger.error(
-                "❌ Pas de yuman_client_id pour client_map_id %s – demande non créée",
+                "❌ yuman_client_id manquant pour client_map_id %s – WO non créé",
                 client_map_id,
             )
             continue
+        yuman_client_id = cli_row[0]["yuman_client_id"]
 
-        yuman_client_id = res_cli2.data[0]["yuman_client_id"]
-        # ---------------------------------------------------------------------
+        payload = {
+            "workorder_type": "Reactive",
+            "title": title,
+            "description": description,
+            "client_id": yuman_client_id,
+            "site_id": site_id,
+            "address": address,
+            "manager_id": 10339,  # manager fixe fourni
+            # date_planned absent → Yuman mettra « Current DateTime »
+        }
 
         if dry:
-            logger.info(
-                "[DRY] Nouvelle demande site %s (client_id=%s)", site_id, yuman_client_id
-            )
+            logger.info("[DRY] Création WO site=%s client=%s", site_id, yuman_client_id)
             continue
 
+        # ---------------- Appel API Yuman --------------------
         try:
-            res = yc._post(
-                "workorder_demands",
-                {
-                    "title": title,
-                    "description": description,
-                    "site_id": site_id,
-                    "client_id": yuman_client_id,   # ← utilisé désormais
-                },
-            )
+            res = yc.create_workorder(payload)
             wo_id = res["id"]
 
+            # Insérer le WO en base
             sb.table("work_orders").insert(
                 {
                     "workorder_id": wo_id,
@@ -290,15 +299,17 @@ def create_workorder_demands_for_priority_sites(
                 }
             ).execute()
 
+            # Assigner les tickets VCOM à ce WO
             for t in ts:
                 vc.update_ticket(t["id"], status="assigned")
                 sb.table("tickets").update(
                     {"status": "assigned", "yuman_workorder_id": wo_id}
                 ).eq("vcom_ticket_id", t["id"]).execute()
 
-            logger.info("Demande %s créée pour site %s", wo_id, site_id)
+            logger.info("✅ Workorder %s créé pour site %s", wo_id, site_id)
         except Exception as exc:
-            logger.error("Création demande site %s KO: %s", site_id, exc)
+            logger.error("Création WO site %s KO : %s", site_id, exc)
+
 
 # ---------------------------------------------------------------------------
 # Étape 5 : fermer les tickets VCOM des workorders clos
@@ -365,7 +376,7 @@ def main() -> None:
 
     # 3‑5. Règles métier
     assign_tickets_to_active_workorders(sb, vc, yc, workorders, dry=dry)
-    create_workorder_demands_for_priority_sites(sb, vc, yc, tickets, workorders, dry=dry)
+    create_workorders_for_priority_sites(sb, vc, yc, tickets, workorders, dry=dry)
     close_tickets_of_closed_workorders(sb, vc, yc, dry=dry)
 
     logger.info("✅ Synchronisation terminée")
