@@ -35,6 +35,9 @@ CAT_CENTRALE = 11441
 CAT_MODULE = 11103
 CAT_INVERTER = 11102
 
+# Alias used for panel equipments
+CAT_PANEL = CAT_MODULE
+
 
 ALLOWED_EQUIP_CATEGORIES: Set[int] = {CAT_INVERTER, CAT_MODULE}
 CUSTOM_FIELD_INVERTER_ID = "Inverter ID (Vcom)"
@@ -98,6 +101,200 @@ def sb_upsert(table: str, rows: List[Dict[str, Any]], sb: SupabaseClient,
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def check_vcom_updates(
+    sb: "SupabaseClient",
+    vc: "VCOMAPIClient",
+    *,
+    dry: bool = True,
+) -> List[Dict[str, Any]]:
+    """Detecte les écarts entre Supabase et VCOM sans rien écrire."""
+
+    # --- A. Snapshot DB -------------------------------------------------
+    sites = (
+        sb.table(SITE_TABLE)
+          .select(
+              "id,vcom_system_key,nominal_power,site_area,"
+              "commission_date,name"
+          )
+          .not_.is_("vcom_system_key", None)
+          .execute()
+          .data
+    )
+
+    inv_rows = (
+        sb.table(EQUIP_TABLE)
+          .select(
+              "id,site_id,vcom_device_id,serial_number,name,brand,model"
+          )
+          .eq("category_id", CAT_INVERTER)
+          .eq("is_obsolete", False)
+          .execute()
+          .data
+    )
+
+    panel_rows = (
+        sb.table(EQUIP_TABLE)
+          .select("id,site_id,brand,model,count")
+          .eq("category_id", CAT_PANEL)
+          .execute()
+          .data
+    )
+
+    inv_by_site_dev: Dict[Tuple[int, str], Dict[str, Any]] = {
+        (r["site_id"], r["vcom_device_id"]): r for r in inv_rows
+    }
+    panel_by_site_md: Dict[Tuple[int, str, str], Dict[str, Any]] = {
+        (r["site_id"], r["brand"], r["model"]): r for r in panel_rows
+    }
+
+    # --- B. Noms des sites : 1 seul appel global -----------------------
+    try:
+        systems = vc.get_systems()
+    except Exception as exc:
+        logger.error("VCOM get_systems() failed: %s", exc)
+        raise
+
+    sys_by_key = {sys["key"]: sys for sys in systems}
+
+    # --- C. Boucle sites ------------------------------------------------
+    changes: List[Dict[str, Any]] = []
+    details_to_fetch: Set[Tuple[str, str]] = set()
+    placeholder_inserts: Dict[Tuple[int, str], Dict[str, Any]] = {}
+
+    for s in sites:
+        sys_key = s["vcom_system_key"]
+        vcom_sys = sys_by_key.get(sys_key)
+        if not vcom_sys:
+            logger.warning("Site %s (id=%s) absent de VCOM", sys_key, s["id"])
+            continue
+
+        try:
+            tech = vc.get_technical_data(sys_key)
+            invs = vc.get_inverters(sys_key)
+        except Exception as exc:
+            logger.error("[VCOM] %s – erreur API : %s", sys_key, exc)
+            continue
+
+        site_patch: Dict[str, Any] = {}
+        obsolete_ids: List[int] = []
+        equip_inserts: List[Dict[str, Any]] = []
+        equip_patches: List[Dict[str, Any]] = []
+
+        # 1. Métadonnées site -------------------------------------------
+        if tech.get("nominalPower") != s.get("nominal_power"):
+            site_patch["nominal_power"] = tech.get("nominalPower")
+
+        if tech.get("siteArea") != s.get("site_area"):
+            site_patch["site_area"] = tech.get("siteArea")
+
+        if tech.get("commissionDate") and tech["commissionDate"] != s.get(
+            "commission_date"
+        ):
+            site_patch["commission_date"] = tech["commissionDate"]
+
+        if vcom_sys.get("name") and vcom_sys["name"] != s.get("name"):
+            site_patch["name"] = vcom_sys["name"]
+
+        # 2. Onduleurs (liste) -----------------------------------------
+        for iv in invs:
+            key_db = (s["id"], iv["id"])
+            db_row = inv_by_site_dev.get(key_db)
+
+            needs_detail = False
+
+            if not db_row:
+                needs_detail = True
+            else:
+                if iv.get("serial") and iv["serial"] != db_row["serial_number"]:
+                    needs_detail = True
+                if iv.get("name") and iv["name"] != db_row["name"]:
+                    needs_detail = True
+
+            if not needs_detail:
+                continue
+
+            if db_row:
+                obsolete_ids.append(db_row["id"])
+
+            placeholder = {
+                "site_id": s["id"],
+                "category_id": CAT_INVERTER,
+                "eq_type": "inverter",
+                "vcom_device_id": iv["id"],
+                "name": iv.get("name") or iv["id"],
+                "serial_number": iv.get("serial"),
+                "brand": None,
+                "model": None,
+                "created_at": now_iso(),
+            }
+            equip_inserts.append(placeholder)
+            placeholder_inserts[(s["id"], iv["id"])] = placeholder
+            details_to_fetch.add((sys_key, iv["id"]))
+
+        # 3. Panneaux (update sur place) -------------------------------
+        for p in tech.get("panels", []):
+            key_md = (s["id"], p.get("vendor"), p["model"])
+            db_row = panel_by_site_md.get(key_md)
+
+            if not db_row:
+                equip_inserts.append({
+                    "site_id": s["id"],
+                    "category_id": CAT_PANEL,
+                    "eq_type": "panel",
+                    "brand": p.get("vendor"),
+                    "model": p["model"],
+                    "count": (p["count"] or None),
+                    "created_at": now_iso(),
+                })
+                continue
+
+            patch: Dict[str, Any] = {}
+            if (
+                p.get("count") is not None
+                and p["count"] != db_row.get("count")
+                and not (db_row.get("count") is None and p["count"] == 0)
+            ):
+                patch["count"] = p["count"]
+
+            if patch:
+                patch["id"] = db_row["id"]
+                equip_patches.append(patch)
+
+        if site_patch or obsolete_ids or equip_inserts or equip_patches:
+            changes.append({
+                "site_id": s["id"],
+                "vcom_system_key": sys_key,
+                "site_patch": site_patch,
+                "obsolete_ids": obsolete_ids,
+                "equip_inserts": equip_inserts,
+                "equip_patches": equip_patches,
+            })
+
+    # --- D. Appels unitaires pour détails onduleurs --------------------
+    for sys_key, dev_id in details_to_fetch:
+        try:
+            det = vc.get_inverter_details(sys_key, dev_id)
+        except Exception as exc:
+            logger.warning(
+                "VCOM inverter detail %s/%s failed: %s", sys_key, dev_id, exc
+            )
+            continue
+
+        for chg in changes:
+            ph = placeholder_inserts.get((chg["site_id"], dev_id))
+            if ph and ph in chg["equip_inserts"]:
+                ph["brand"] = det.get("vendor")
+                ph["model"] = det.get("model")
+                break
+
+    if dry:
+        logger.info(
+            "[DRY] %d site(s) présentent des écarts VCOM → DB", len(changes)
+        )
+
+    return changes
 
 
 # ───────────────────────── Phase 1 : Import VCOM → DB
