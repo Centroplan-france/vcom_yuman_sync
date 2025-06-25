@@ -2,10 +2,15 @@ import random
 import string
 import pytest
 from src.vysync.db import supabase, sb_upsert
-from postgrest.exceptions import APIError
+
+try:
+    from postgrest.exceptions import APIError
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    APIError = None
 
 pytestmark = pytest.mark.skipif(
-    supabase is None, reason="Supabase client not initialised (env vars missing)"
+    supabase is None or APIError is None,
+    reason="Supabase client or postgrest library not available",
 )
 
 
