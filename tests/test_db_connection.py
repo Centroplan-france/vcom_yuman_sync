@@ -3,7 +3,7 @@ import pytest
 from sqlalchemy import text
 from src.vysync.db import engine
 
-if "DATABASE_URL" not in os.environ:
+if engine is None:
     pytest.skip("DATABASE_URL not set", allow_module_level=True)
 
 

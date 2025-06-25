@@ -2,7 +2,11 @@ import os
 from dotenv import load_dotenv
 from sqlmodel import create_engine
 from typing import Any, Dict, List
-from supabase import create_client, Client as SupabaseClient
+try:
+    from supabase import create_client, Client as SupabaseClient
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    create_client = None  # type: ignore
+    SupabaseClient = Any  # type: ignore
 
 
 from .app_logging import init_logger
@@ -10,7 +14,10 @@ logger = init_logger(__name__)
 
 load_dotenv()
 
-engine = create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
+db_url = os.getenv("DATABASE_URL")
+engine = create_engine(db_url, pool_pre_ping=True) if db_url else None
+if engine is None:
+    logger.warning("DATABASE_URL not set – database engine disabled")
 
 # ---------------------------------------------------------------------------
 # Supabase PostgREST client (requis pour les upserts rapides)
@@ -19,11 +26,13 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
 supabase: SupabaseClient | None = None
-if SUPABASE_URL and SUPABASE_SERVICE_KEY:
+if SUPABASE_URL and SUPABASE_SERVICE_KEY and create_client:
     supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
     logger.info("Supabase client initialised")
 else:
-    logger.warning("SUPABASE_URL / SUPABASE_SERVICE_KEY not set – supabase client disabled")
+    logger.warning(
+        "Supabase client disabled (missing package or env vars)"
+    )
 
 # ---------------------------------------------------------------------------
 # Helpers – generic UPSERT via Supabase REST
