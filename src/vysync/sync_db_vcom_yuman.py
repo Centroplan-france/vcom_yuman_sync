@@ -22,6 +22,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple, Any, Set
+from itertools import chain
 
 from supabase import create_client, Client as SupabaseClient
 
@@ -295,6 +296,59 @@ def check_vcom_updates(
         )
 
     return changes
+
+
+def _apply_vcom_changes_to_db(
+    sb: "SupabaseClient",
+    changes: List[Dict[str, Any]],
+    *,
+    dry: bool = True,
+) -> None:
+    """Applique dans Supabase le résultat de `check_vcom_updates()`."""
+
+    # ──────────────── 1. Agrégation des listes ──────────────────────────
+    site_updates: List[Dict[str, Any]] = []
+    obsolete_ids: List[int] = []
+    equip_inserts: List[Dict[str, Any]] = []
+    panel_patches: List[Dict[str, Any]] = []
+
+    for chg in changes:
+        if chg["site_patch"]:
+            site_updates.append({"id": chg["site_id"], **chg["site_patch"]})
+        obsolete_ids.extend(chg["obsolete_ids"])
+        equip_inserts.extend(chg["equip_inserts"])
+        panel_patches.extend(chg["equip_patches"])
+
+    now = now_iso()
+
+    logger.info(
+        "Applying VCOM → DB: %d site update(s), %d obsolete, %d insert(s), %d panel patch(es)",
+        len(site_updates), len(obsolete_ids), len(equip_inserts), len(panel_patches)
+    )
+
+    if dry:
+        logger.info("[DRY] Aucun écrit en base effectué.")
+        return
+
+    # ──────────────── 2. Sites : patch partiel --------------------------
+    if site_updates:
+        sb.table(SITE_TABLE).upsert(site_updates, on_conflict="id").execute()
+
+    # ──────────────── 3. Obsolescence onduleurs -------------------------
+    if obsolete_ids:
+        sb.table(EQUIP_TABLE)\
+          .update({"is_obsolete": True, "obsolete_at": now})\
+          .in_("id", obsolete_ids)\
+          .execute()
+
+    # ──────────────── 4. Inserts (ond./panneaux) ------------------------
+    if equip_inserts:
+        sb.table(EQUIP_TABLE).insert(equip_inserts).execute()
+
+    # ──────────────── 5. Patch compte panneaux -------------------------
+    for patch in panel_patches:
+        equip_id = patch.pop("id")
+        sb.table(EQUIP_TABLE).update(patch).eq("id", equip_id).execute()
 
 
 # ───────────────────────── Phase 1 : Import VCOM → DB
