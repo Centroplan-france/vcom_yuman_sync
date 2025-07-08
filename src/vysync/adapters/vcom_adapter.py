@@ -70,7 +70,7 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None,) -> Tuple[Dict[str, S
         inverters = vc.get_inverters(key)
 
         # on garantit un ordre stable pour attribuer les index (WR 1, WR 2, …)
-        for idx, inv in enumerate(sorted(inverters, key=lambda i: i["id"]), start=1):
+        for idx, inv in enumerate(inverters, key=lambda i: i["id"]), start=1):
 
             det_inv = vc.get_inverter_details(key, inv["id"])
 
