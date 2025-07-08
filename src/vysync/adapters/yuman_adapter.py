@@ -304,7 +304,7 @@ class YumanAdapter:
         Synchronise modules, onduleurs et strings entre VCOM (db_equips)
         et Yuman (liste courante). Ordre : modules → onduleurs → strings.
         """
-        # ───────────────────────── preparation ───────────────────────────
+        # ───────────────────────── préparation ────────────────────────────
         y_equips     = self.fetch_equips()
         patch        = diff_entities(y_equips, db_equips)
 
@@ -341,18 +341,12 @@ class YumanAdapter:
                 continue
 
             payload: Dict[str, Any] = {
-                "site_id":      site_row["yuman_site_id"],
-                "category_id":  e.category_id,
-                "brand":        e.brand,
+                "site_id":       site_row["yuman_site_id"],
+                "category_id":   e.category_id,
+                "brand":         e.brand,
                 "serial_number": e.vcom_device_id,   # unicité garantie
+                "name":          e.name,             # onduleur prend désormais e.name
             }
-
-            # — nommage des onduleurs  « WR N onduleur »
-            if e.category_id == CAT_INVERTER:
-                idx = getattr(e, "index", None) or 1
-                payload["name"] = f"WR {idx} onduleur"
-            else:
-                payload["name"] = e.name
 
             # — constitution des custom-fields
             fields: List[Dict[str, Any]] = []
@@ -411,12 +405,10 @@ class YumanAdapter:
             payload: Dict[str, Any]            = {}
             fields_patch: List[Dict[str, Any]] = []
 
-            # ── renommage onduleur
+            # ── renommage onduleur : prendre e.name depuis la DB
             if old.category_id == CAT_INVERTER:
-                idx = getattr(new, "index", None) or 1
-                desired_name = f"WR {idx} onduleur"
-                if old.name != desired_name:
-                    payload["name"] = desired_name
+                if old.name != new.name:
+                    payload["name"] = new.name
 
             # ── parent pour STRING
             if old.category_id == CAT_STRING and new.parent_id:

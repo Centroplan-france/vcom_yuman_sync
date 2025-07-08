@@ -67,15 +67,19 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None,) -> Tuple[Dict[str, S
             equips[mod.key()] = mod
 
         # --- Onduleurs -------------------------------------------------
-        inverters = vc.get_inverters(key)        
-        for inv in inverters:
+        inverters = vc.get_inverters(key)
+
+        # on garantit un ordre stable pour attribuer les index (WR 1, WR 2, …)
+        for idx, inv in enumerate(sorted(inverters, key=lambda i: i["id"]), start=1):
+
             det_inv = vc.get_inverter_details(key, inv["id"])
-            inv_eq  = Equipment(
+
+            inv_eq = Equipment(
                 vcom_system_key = key,
                 category_id     = CAT_INVERTER,
                 eq_type         = "inverter",
                 vcom_device_id  = inv["id"],
-                name            = inv.get("name") or inv["id"],
+                name            = f"WR {idx} onduleur",
                 brand           = det_inv.get("vendor"),
                 model           = det_inv.get("model"),
                 serial_number   = inv.get("serial"),
