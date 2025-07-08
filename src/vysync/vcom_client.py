@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""VCOM API client with basic rate limit handling."""
+"""VCOM API client with basic rate-limit handling."""
+
+from __future__ import annotations
+
+import logging
+import os
+import time
+from typing import Any, Dict, List
 
 import requests
-import time
-import logging
-from .app_logging import init_logger
-from typing import Dict, List, Any
-import os
 
-# Automatically load environment variables from a .env file if available
-try:
+from .app_logging import init_logger
+
+try:                              # optional .env
     from dotenv import load_dotenv
     load_dotenv()
 except Exception:
@@ -19,266 +22,221 @@ logger = init_logger(__name__)
 
 
 class VCOMAPIClient:
-    """VCOM API client with basic helpers."""
+    """Client REST VCOM v2."""
 
-    def __init__(self, log_level=logging.INFO):
-        """Initialise the VCOM client."""
-        
-        # Configuration
-        self.base_url = "https://api.meteocontrol.de/v2"
-        self.api_key = os.getenv("VCOM_API_KEY")
-        self.username = os.getenv("VCOM_USERNAME")
-        self.password = os.getenv("VCOM_PASSWORD")
-        
-        # Rate limiting based on VCOM API 10.000 plan
+    BASE_URL = "https://api.meteocontrol.de/v2"
+    _RL_DAY_HEADER = "X-RateLimit-Remaining-Day"
+    _RL_MIN_HEADER = "X-RateLimit-Remaining-Minute"
+
+    # ------------------------------------------------------------------ #
+    # Constructeur                                                       #
+    # ------------------------------------------------------------------ #
+    def __init__(self, log_level: int = logging.INFO) -> None:
+        self.api_key   = os.getenv("VCOM_API_KEY")
+        self.username  = os.getenv("VCOM_USERNAME")
+        self.password  = os.getenv("VCOM_PASSWORD")
+
+        self._validate_credentials()
+
+        # --- Session HTTP réutilisable ---------------------------------
+        self.session = requests.Session()
+        self.session.auth = (self.username, self.password)
+        self.session.headers.update(
+            {
+                "X-API-KEY": self.api_key,
+                "Accept":    "application/json",
+                "User-Agent": "VCOM-Yuman-Sync/1.0",
+            }
+        )
+
+        # --- Rate-limit tracking ---------------------------------------
         self.rate_limits = {
             "requests_per_minute": 90,
-            "requests_per_day": 10000,
-            "min_delay": 0.80,
-            "adaptive_delay": 2.0
+            "requests_per_day":    10_000,
+            "min_delay":           0.80,
+            "adaptive_delay":      2.0,
         }
-        
-        # Request tracking
-        self.request_history = []
-        self.last_request_time = 0
-        self.consecutive_errors = 0
-        
-        # Default headers
-        self.default_headers = {
-            "X-API-KEY": self.api_key,
-            "Accept": "application/json",
-            "User-Agent": "VCOM-Yuman-Sync/1.0"
-        }
-        
-        # Requests configuration
-        self.auth = (self.username, self.password)
+        self._req_ts_min: List[float] = []     # appels des 60 dernières s
+        self._req_ts_day: List[float] = []     # appels des 24 h dernières
+        self._last_request = 0.0
+        self._consecutive_errors = 0
         self.timeout = 30
-        
-        self.logger = logger
-        self.logger.setLevel(log_level)
-        
-        # Basic validation
-        self._validate_credentials()
-        
 
-        self.logger.info("VCOM client initialised")
-    
-    def _validate_credentials(self):
-        """Valide les credentials obligatoires"""
-        if not all([self.api_key, self.username, self.password]):
-            missing = []
-            if not self.api_key: 
-                missing.append("VCOM_API_KEY")
-            if not self.username: 
-                missing.append("VCOM_USERNAME") 
-            if not self.password: 
-                missing.append("VCOM_PASSWORD")
-            
-            raise ValueError(f"❌ Credentials manquants: {', '.join(missing)}")
-    
-    def _enforce_rate_limit(self):
-        """Applique le rate limiting intelligent"""
+        logger.setLevel(log_level)
+        logger.info("VCOM client initialised")
+
+    # ------------------------------------------------------------------ #
+    # Validation                                                          #
+    # ------------------------------------------------------------------ #
+    def _validate_credentials(self) -> None:
+        missing = [k for k in ("VCOM_API_KEY", "VCOM_USERNAME", "VCOM_PASSWORD")
+                   if os.getenv(k) is None]
+        if missing:
+            raise ValueError(f"❌ Credentials manquants : {', '.join(missing)}")
+
+    # ------------------------------------------------------------------ #
+    # Rate limiting                                                       #
+    # ------------------------------------------------------------------ #
+    def _enforce_rate_limit(self) -> None:
         now = time.time()
-        
-        # Clean history (keep last minute)
-        cutoff = now - 60
-        self.request_history = [t for t in self.request_history if t > cutoff]
-        
-        # Compute required delay
-        if self.last_request_time > 0:
-            elapsed = now - self.last_request_time
-            remaining_requests = self.rate_limits["requests_per_minute"] - len(self.request_history)
-            
-            # Adaptive delay depending on remaining quota
-            if remaining_requests <= 10:
-                min_delay = self.rate_limits["adaptive_delay"]
-                self.logger.warning(
-                    "Low quota (%s left), increasing delay", remaining_requests
-                )
-            else:
-                min_delay = self.rate_limits["min_delay"]
-            
-            if elapsed < min_delay:
-                sleep_time = min_delay - elapsed
-                self.logger.debug("Rate limiting: pause %.2fs", sleep_time)
-                time.sleep(sleep_time)
-        
-        # Update trackers
-        self.last_request_time = time.time()
-        self.request_history.append(self.last_request_time)
-    
+
+        # Purge : 60 s et 24 h
+        self._req_ts_min[:] = [t for t in self._req_ts_min if now - t < 60]
+        self._req_ts_day[:] = [t for t in self._req_ts_day if now - t < 86_400]
+
+        # Quota minute
+        if len(self._req_ts_min) >= self.rate_limits["requests_per_minute"]:
+            sleep_for = self.rate_limits["adaptive_delay"]
+            logger.debug("Rate-limit minute atteint → sleep %.1fs", sleep_for)
+            time.sleep(sleep_for)
+
+        # Quota jour (approximatif : pas d’info serveur)
+        if len(self._req_ts_day) >= self.rate_limits["requests_per_day"]:
+            raise RuntimeError("Quota journalier VCOM atteint")
+
+        self._last_request = now
+        self._req_ts_min.append(now)
+        self._req_ts_day.append(now)
+
+    # ------------------------------------------------------------------ #
+    # Requête HTTP bas niveau                                             #
+    # ------------------------------------------------------------------ #
     def _make_request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
-        """Perform an HTTP request with basic retries."""
-        
-        # Apply rate limiting
+        """Effectue une requête avec retry & rate-limit."""
+
         self._enforce_rate_limit()
-        
-        # Build URL
-        url = f"{self.base_url}/{endpoint.lstrip('/')}"
-        
-        # Merge headers
-        headers = self.default_headers.copy()
-        if 'headers' in kwargs:
-            headers.update(kwargs['headers'])
-            del kwargs['headers']
-        
-        # Build request parameters
-        request_config = {
-            'headers': headers,
-            'auth': self.auth,
-            'timeout': self.timeout,
-            **kwargs
-        }
-        
-        # Simple retry logic
+        url = f"{self.BASE_URL}/{endpoint.lstrip('/')}"
+
+        # Fusion d’en-têtes éventuels
+        headers = kwargs.pop("headers", {})
+        if headers:
+            local_headers = self.session.headers.copy()
+            local_headers.update(headers)
+        else:
+            local_headers = self.session.headers
+
         max_attempts = 3
         for attempt in range(max_attempts):
             try:
-                self.logger.debug(
-                    "%s %s (attempt %s)", method.upper(), endpoint, attempt + 1
+                logger.debug("%s %s (attempt %d)", method.upper(), endpoint, attempt + 1)
+                response = self.session.request(
+                    method,
+                    url,
+                    headers=local_headers,
+                    timeout=self.timeout,
+                    **kwargs,
                 )
-                
-                response = requests.request(method, url, **request_config)
-                
-                # Status code handling
+
+                # 429 : Retry-After
                 if response.status_code == 429:
-                    retry_after = int(response.headers.get('Retry-After', 60))
-                    self.logger.warning(
-                        "Rate limit hit, sleeping %s s", retry_after
-                    )
+                    retry_after = int(response.headers.get("Retry-After", 60))
+                    logger.warning("429 received → sleep %s s", retry_after)
                     time.sleep(retry_after)
                     continue
-                
-                elif response.status_code == 401:
-                    self.logger.error("Authentication error")
-                    raise requests.exceptions.HTTPError("Authentication failed")
-                
-                elif response.status_code >= 500:
-                    self.logger.warning(
-                        "Server error %s, retry", response.status_code
-                    )
-                    if attempt < max_attempts - 1:
-                        time.sleep(2 ** attempt)
-                        continue
-                
-                # Log rate limit headers when available
+
+                # ≥500 : retry exponentiel
+                if 500 <= response.status_code < 600 and attempt < max_attempts - 1:
+                    backoff = 2 ** attempt
+                    logger.warning("Server %s → retry in %s s",
+                                   response.status_code, backoff)
+                    time.sleep(backoff)
+                    continue
+
                 self._log_rate_limit_headers(response)
-                
-                # Success
+
                 response.raise_for_status()
-                self.consecutive_errors = 0
+                self._consecutive_errors = 0
                 return response
-                
-            except requests.exceptions.RequestException as e:
-                self.consecutive_errors += 1
-                self.logger.error(
-                    "Request error (attempt %s): %s", attempt + 1, str(e)
-                )
-                
+
+            except requests.RequestException as exc:
+                self._consecutive_errors += 1
+                logger.error("Request error (attempt %d) : %s", attempt + 1, exc)
                 if attempt < max_attempts - 1:
-                    sleep_time = 2 ** attempt
-                    self.logger.info("Retry in %s s", sleep_time)
-                    time.sleep(sleep_time)
+                    backoff = 2 ** attempt
+                    logger.info("Retry in %s s", backoff)
+                    time.sleep(backoff)
                 else:
                     raise
-        
-        raise Exception("Maximum attempts reached")
-    
-    def _log_rate_limit_headers(self, response: requests.Response):
-        """Log rate limiting info"""
-        headers = response.headers
-        rate_info = {}
-        
-        for header in [
-            "X-RateLimit-Remaining-Minute",
-            "X-RateLimit-Remaining-Day",
-        ]:
-            if header in headers:
-                rate_info[header] = headers[header]
-        
-        if rate_info:
-            remaining_min = rate_info.get('X-RateLimit-Remaining-Minute', 'N/A')
-            remaining_day = rate_info.get('X-RateLimit-Remaining-Day', 'N/A')
-            self.logger.debug(
-                "Remaining quota: %s/min, %s/day", remaining_min, remaining_day
-            )
-    
+
+        raise RuntimeError("Maximum attempts reached for %s %s" % (method, endpoint))
+
+    # ------------------------------------------------------------------ #
+    # Logs quota                                                          #
+    # ------------------------------------------------------------------ #
+    def _log_rate_limit_headers(self, resp: requests.Response) -> None:
+        rem_min = resp.headers.get(self._RL_MIN_HEADER)
+        rem_day = resp.headers.get(self._RL_DAY_HEADER)
+        if rem_min or rem_day:
+            logger.debug("Remaining quota: %s/min, %s/day", rem_min, rem_day)
+
+    # ------------------------------------------------------------------ #
+    # API public : état interne                                           #
+    # ------------------------------------------------------------------ #
     def get_rate_limit_status(self) -> Dict[str, Any]:
-        """Return current rate limit status."""
         return {
-            "requests_last_minute": len(self.request_history),
-            "remaining_minute": max(0, self.rate_limits["requests_per_minute"] - len(self.request_history)),
-            "consecutive_errors": self.consecutive_errors,
-            "last_request": self.last_request_time
+            "requests_last_minute": len(self._req_ts_min),
+            "requests_last_day":    len(self._req_ts_day),
+            "consecutive_errors":   self._consecutive_errors,
+            "last_request":         self._last_request,
         }
-    
+
+    # ------------------------------------------------------------------ #
+    # API public : connectivité                                           #
+    # ------------------------------------------------------------------ #
     def test_connectivity(self) -> bool:
-        """Quick connectivity check."""
         try:
-            self.logger.info("VCOM connectivity OK")
-            self._make_request('GET', '/session')
+            self._make_request("GET", "/session")
+            logger.info("VCOM connectivity OK")
             return True
-        except Exception as e:
-            self.logger.error("Connectivity test failed: %s", str(e))
+        except Exception as exc:
+            logger.error("Connectivity test failed: %s", exc)
             return False
-    
-    # === Main endpoints ===
-    
+
+    # ------------------------------------------------------------------ #
+    # Endpoints utilitaires                                               #
+    # ------------------------------------------------------------------ #
     def get_session(self) -> Dict[str, Any]:
-        """Return current session information."""
-        response = self._make_request('GET', '/session')
-        return response.json()
-    
+        return self._make_request("GET", "/session").json()
+
     def get_systems(self) -> List[Dict[str, Any]]:
-        """Return list of all systems."""
-        response = self._make_request('GET', '/systems')
-        return response.json().get('data', [])
-    
+        return self._make_request("GET", "/systems").json().get("data", [])
+
     def get_system_details(self, system_key: str) -> Dict[str, Any]:
-        """Return system details."""
-        response = self._make_request('GET', f'/systems/{system_key}')
-        return response.json().get('data', {})
-    
+        return self._make_request("GET", f"/systems/{system_key}").json().get("data", {})
+
     def get_technical_data(self, system_key: str) -> Dict[str, Any]:
-        """Return system technical data."""
-        response = self._make_request('GET', f'/systems/{system_key}/technical-data')
-        return response.json().get('data', {})
-    
+        return self._make_request("GET", f"/systems/{system_key}/technical-data").json().get("data", {})
+
     def get_inverters(self, system_key: str) -> List[Dict[str, Any]]:
-        """Return list of inverters for a system."""
-        response = self._make_request('GET', f'/systems/{system_key}/inverters')
-        return response.json().get('data', [])
-    
+        return self._make_request("GET", f"/systems/{system_key}/inverters").json().get("data", [])
+
     def get_inverter_details(self, system_key: str, inverter_id: str) -> Dict[str, Any]:
-        """Return inverter details."""
-        response = self._make_request('GET', f'/systems/{system_key}/inverters/{inverter_id}')
-        return response.json().get('data', {})
-    
-    def get_tickets(self, status: str = None, priority: str = None, 
-                   system_key: str = None, **kwargs) -> List[Dict[str, Any]]:
-        """Return tickets using optional filters."""
-        params = {}
+        return self._make_request("GET", f"/systems/{system_key}/inverters/{inverter_id}").json().get("data", {})
+
+    # -- Tickets --------------------------------------------------------
+    def get_tickets(
+        self,
+        status: str | None = None,
+        priority: str | None = None,
+        system_key: str | None = None,
+        **filters,
+    ) -> List[Dict[str, Any]]:
+        params: Dict[str, Any] = {**filters}
         if status:
-            params['status'] = status
+            params["status"] = status
         if priority:
-            params['priority'] = priority  
+            params["priority"] = priority
         if system_key:
-            params['systemKey'] = system_key
-        params.update(kwargs)
-        
-        response = self._make_request('GET', '/tickets', params=params)
-        return response.json().get('data', [])
-    
+            params["systemKey"] = system_key
+
+        return self._make_request("GET", "/tickets", params=params).json().get("data", [])
+
     def get_ticket_details(self, ticket_id: str) -> Dict[str, Any]:
-        """Return ticket details."""
-        response = self._make_request('GET', f'/tickets/{ticket_id}')
-        return response.json().get('data', {})
-    
+        return self._make_request("GET", f"/tickets/{ticket_id}").json().get("data", {})
+
     def update_ticket(self, ticket_id: str, **updates) -> bool:
-        """Update a ticket."""
-        response = self._make_request('PATCH', f'/tickets/{ticket_id}', json=updates)
-        return response.status_code == 204
-    
+        resp = self._make_request("PATCH", f"/tickets/{ticket_id}", json=updates)
+        return resp.status_code == 204
+
     def close_ticket(self, ticket_id: str, summary: str = "Closed via API") -> bool:
-        """Close a ticket."""
         return self.update_ticket(ticket_id, status="closed", summary=summary)

@@ -28,10 +28,9 @@ class Site:
         return asdict(self)
 
 # ──────────────────────── Equipements ────────────────────────
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)               # ① on désactive l’__eq__ auto
 class Equipment:
-    # NB: site_key reste stocké pour filtre/lookup mais ne participe plus à la clé
-    site_key: str
+    vcom_system_key: str
     category_id: int
     eq_type: str
     vcom_device_id: str
@@ -39,18 +38,27 @@ class Equipment:
     brand: Optional[str] = None
     model: Optional[str] = None
     serial_number: Optional[str] = None
-    count: Optional[int] = None
-    parent_vcom_id: Optional[str] = None      # pour STRING → onduleur
+    count: Optional[int] = None                # ex-string_count ?
+    parent_id: Optional[str] = None
     yuman_material_id: Optional[int] = None
 
-    def key(self) -> str:                      # ← CHANGEMENT MAJEUR
+    # --- clé « métier » -----------------------------------
+    def key(self) -> str:
         return self.vcom_device_id
 
+    # --- sérialisation -----------------------------------
     def to_dict(self) -> Dict[str, Any]:
-        d = asdict(self)
-        d.pop("site_key", None)                # jamais envoyé vers la DB
-        d.pop("parent_vcom_id", None)          # géré ailleurs
-        return d
+        return asdict(self)
+
+    # --- égalité (cohérente avec la doc-string) ---------- ②
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Equipment):
+            return NotImplemented
+        return self.vcom_device_id == other.vcom_device_id
+
+    # --- hash cohérent avec __eq__ ----------------------- ③
+    def __hash__(self) -> int:
+        return hash(self.vcom_device_id)
 
 # ───────────────────────── Clients ───────────────────────────
 @dataclass(frozen=True)

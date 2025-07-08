@@ -1,29 +1,33 @@
 """Small wrapper around the Yuman v1 REST API."""
-
 from __future__ import annotations
 
+import json
 import os
 import time
 from typing import Any, Dict, List, Optional
 
-
 import requests
 from requests import Response
+import logging
 from .app_logging import init_logger
+
 logger = init_logger(__name__)
 
-DEFAULT_PER_PAGE = 100  # Yuman accepts up to 200
-DEFAULT_MAX_RETRY = 5
-DEFAULT_BACKOFF = 2.0  # exponential backoff in seconds
+DEFAULT_PER_PAGE   = 100   
+DEFAULT_MAX_RETRY  = 5
+DEFAULT_BACKOFF    = 2.0   
 
 
 class YumanClientError(Exception):
-    """Generic client-side Yuman error."""
+    """Erreur générique côté client Yuman."""
 
 
 class YumanClient:  # pylint: disable=too-many-public-methods
-    """Simple REST client for Yuman v1."""
+    """Client REST minimaliste pour Yuman v1."""
 
+    # ------------------------------------------------------------------ #
+    # Construction                                                       #
+    # ------------------------------------------------------------------ #
     def __init__(
         self,
         token: Optional[str] = None,
@@ -33,80 +37,96 @@ class YumanClient:  # pylint: disable=too-many-public-methods
         backoff: float = DEFAULT_BACKOFF,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.token = token or os.getenv("YUMAN_TOKEN")
+        self.token    = token or os.getenv("YUMAN_TOKEN")
         if not self.token:
             raise ValueError("Yuman token missing (env YUMAN_TOKEN or param token)")
 
-        self.per_page = min(per_page, 200)
-        self.max_retry = max_retry
-        self.backoff = backoff    
-        # throttle : 3,3 req/s  (quota Yuman = 4 req/s)
-        self._last_call = 0.0
-        self.min_interval = 0.27  # en secondes
+        self.per_page   = min(per_page, 200)
+        self.max_retry  = max_retry
+        self.backoff    = backoff
+        self.min_interval = 0.33                 # 3,7 req/s ≃ 4 req/s quota
 
-        # quota minute Yuman (60 req/min)
-        self._minute_start = time.time()
-        self._req_count_minute = 0
-        self.max_per_minute = 60
+        # minute-level quota
+        self._window_start = time.time()
+        self._req_in_min   = 0
+        self.max_per_min   = 55
 
+        self._last_call = 0.0                    # throttle per-second
+
+        # session HTTP
         self.session = requests.Session()
         self.session.headers.update(
             {
                 "Authorization": f"Bearer {self.token}",
-                "Content-Type": "application/json",
-                "User-Agent": "vcom-yuman-sync/0.1",
+                "Content-Type":  "application/json",
+                "User-Agent":    "vcom-yuman-sync/0.1",
             }
         )
 
-    # ------------------------------------------------------------------
-    # Low‑level helpers
-    # ------------------------------------------------------------------
-
+    # ------------------------------------------------------------------ #
+    # Helpers bas niveau                                                 #
+    # ------------------------------------------------------------------ #
     def _build_url(self, endpoint: str) -> str:
-        endpoint = endpoint.lstrip("/")
-        return f"{self.base_url}/{endpoint}"
+        return f"{self.base_url}/{endpoint.lstrip('/')}"
 
-    def _request(self, method: str, endpoint: str, **kwargs: Any) -> Response:
-
-        # --------------------------------------------------
-        # Minute-level rate-limit  (60 req/min)
-        # --------------------------------------------------
+    # -------- quota minute & throttle ----------------------------------
+    def _minute_gate(self) -> None:
         now = time.time()
-        # reset window every 60s
-        if now - self._minute_start >= 60:
-            self._minute_start = now
-            self._req_count_minute = 0
-        # if we've hit the per-minute quota, wait out the window
-        elif self._req_count_minute >= self.max_per_minute:
-            to_sleep = 60 - (now - self._minute_start)
-            logger.info("Minute quota reached — sleeping %.1fs", to_sleep)
-            time.sleep(to_sleep)
-            self._minute_start = time.time()
-            self._req_count_minute = 0
-        # count this attempt
-        self._req_count_minute += 1
-        # --------------------------------------------------
+        if now - self._window_start >= 60:
+            self._window_start = now
+            self._req_in_min   = 0
 
-        # ------------------------------------------------------------------
-        # Throttle : 3,3 req/s  → 0,30 s mini entre deux appels
-        # ------------------------------------------------------------------
+        if self._req_in_min >= self.max_per_min:
+            to_sleep = 60 - (now - self._window_start) + 0.1
+            logger.info("Minute quota reached → sleep %.1fs", to_sleep)
+            time.sleep(to_sleep)
+            self._window_start = time.time()
+            self._req_in_min   = 0
+
+        self._req_in_min += 1
+
+    def _second_gate(self) -> None:
         elapsed = time.time() - self._last_call
         if elapsed < self.min_interval:
             time.sleep(self.min_interval - elapsed)
 
-        url = self._build_url(endpoint)
+    # -------- requête ---------------------------------------------------
+    def _request(self, method: str, endpoint: str, **kwargs: Any) -> Response:
+        url     = self._build_url(endpoint)
         attempt = 0
 
         while True:
             attempt += 1
+            self._minute_gate()
+            self._second_gate()
+
             try:
+                body = kwargs.get("json") or kwargs.get("data")
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "[YUMAN ➜] %s %s payload=%s",
+                        method, endpoint,
+                        None if body is None else json.dumps(body, ensure_ascii=False, default=str)
+                    )
+
                 resp: Response = self.session.request(
                     method,
                     url,
                     timeout=30,
                     **kwargs,
                 )
-            except requests.RequestException as exc:  # network error, DNS, etc.
+
+                if logger.isEnabledFor(logging.DEBUG):
+                    try:
+                        dbg_resp = json.dumps(resp.json(), ensure_ascii=False, sort_keys=True)[:800]
+                    except ValueError:
+                        dbg_resp = resp.text[:800]
+                    logger.debug(
+                        "[YUMAN ⇠] %s %s status=%s\nresp=%s",
+                        method, endpoint, resp.status_code, dbg_resp
+                    )
+
+            except requests.RequestException as exc:  # network error
                 if attempt > self.max_retry:
                     raise YumanClientError("Network error") from exc
                 wait = self.backoff ** attempt
@@ -114,76 +134,76 @@ class YumanClient:  # pylint: disable=too-many-public-methods
                 time.sleep(wait)
                 continue
 
+            # ---------------- Handle HTTP codes -------------------------
             if resp.status_code == 429:
+                retry_after = float(resp.headers.get("Retry-After", 60))
                 if attempt > self.max_retry:
                     raise YumanClientError("Too many 429, giving up")
-                retry_after = float(resp.headers.get("Retry-After", self.backoff ** attempt))
                 logger.info("HTTP 429 — retry %s in %.1fs", attempt, retry_after)
                 time.sleep(retry_after)
                 continue
 
             if resp.status_code >= 400:
-                # — log complet pour debug avant de lever l’erreur
                 logger.error(
                     "Yuman %s %s → %s\nHeaders: %s\nPayload: %s\nResponse: %s",
-                    method,
-                    url,
-                    resp.status_code,
+                    method, url, resp.status_code,
                     dict(resp.headers),
-                    kwargs.get("json") or kwargs.get("params"),
-                    resp.text,
+                    body,
+                    resp.text[:500],
                 )
                 raise YumanClientError(f"{method} {url} → {resp.status_code}: {resp.text}")
 
-            # appel réussi → on met à jour le timestamp pour le prochain throttle
+            # succès
             self._last_call = time.time()
             return resp
 
-
-    # GET paginé – renvoie la liste concaténée de tous les items
-    def _get(self, endpoint: str, *, params: Optional[Dict[str, Any]] = None, max_pages: Optional[int] = None,) -> List[Dict[str, Any]]:
-        params = params or {}
-        # Yuman attend « perPage » (camelCase)
+    # ------------------------------------------------------------------ #
+    # GET paginé                                                         #
+    # ------------------------------------------------------------------ #
+    def _get(
+        self,
+        endpoint: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        max_pages: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        params = params.copy() if params else {}
         params.setdefault("perPage", self.per_page)
 
         page = 1
-        out: List[Dict[str, Any]] = []
+        items: List[Dict[str, Any]] = []
 
         while True:
             params["page"] = page
-            resp = self._request("GET", endpoint, params=params)
-            data = resp.json()
+            data = self._request("GET", endpoint, params=params).json()
 
-            # Certains endpoints renvoient directement la liste
-            items = data.get("items") if isinstance(data, dict) else data
-            if items is None:
-                items = data
-            out.extend(items)
+            # Certains endpoints renvoient directement une liste
+            if isinstance(data, list):
+                items.extend(data)
+                break
 
-            total_pages = (
-                data.get("total_pages")
-                or data.get("totalPages")
-                or 1
-            )
+            page_items = data.get("items") or []
+            items.extend(page_items)
+
+            total_pages = data.get("total_pages") or data.get("totalPages") or 1
             if page >= total_pages or (max_pages and page >= max_pages):
                 break
             page += 1
 
-        return out
+        return items
 
+    # ------------------------------------------------------------------ #
+    # POST / PATCH helpers                                               #
+    # ------------------------------------------------------------------ #
+    def _post(self, endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._request("POST", endpoint, json=payload).json()
 
-    def _post(self, endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:  # noqa: D401
-        resp = self._request("POST", endpoint, json=payload)
-        return resp.json()
+    def _patch(self, endpoint: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+        return self._request("PATCH", endpoint, json=patch).json()
 
-    def _patch(self, endpoint: str, patch: Dict[str, Any]) -> Dict[str, Any]:  # noqa: D401
-        resp = self._request("PATCH", endpoint, json=patch)
-        return resp.json()
-
-    # ------------------------------------------------------------------
-    # Clients
-    # ------------------------------------------------------------------
-
+    # ------------------------------------------------------------------ #
+    # Clients                                                            #
+    # ------------------------------------------------------------------ #
     def list_clients(self) -> List[Dict[str, Any]]:
         return self._get("clients")
 
@@ -196,11 +216,16 @@ class YumanClient:  # pylint: disable=too-many-public-methods
     def update_client(self, client_id: int, patch: Dict[str, Any]) -> Dict[str, Any]:
         return self._patch(f"clients/{client_id}", patch)
 
-    # ------------------------------------------------------------------
-    # Sites
-    # ------------------------------------------------------------------
-
-    def list_sites(self, *, per_page: int = DEFAULT_PER_PAGE, since: Optional[str] = None, embed: Optional[str] = None,) -> List[Dict[str, Any]]:
+    # ------------------------------------------------------------------ #
+    # Sites                                                              #
+    # ------------------------------------------------------------------ #
+    def list_sites(
+        self,
+        *,
+        per_page: int = DEFAULT_PER_PAGE,
+        since: Optional[str] = None,
+        embed: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         params: Dict[str, Any] = {"perPage": per_page}
         if since:
             params["updated_at_gte"] = since
@@ -208,17 +233,9 @@ class YumanClient:  # pylint: disable=too-many-public-methods
             params["embed"] = embed
         return self._get("sites", params=params)
 
-
-
-    def get_site(self, site_id: int, *, embed: Optional[str] = None):
+    def get_site(self, site_id: int, *, embed: Optional[str] = None) -> Dict[str, Any]:
         params = {"embed": embed} if embed else None
-        resp = self._request("GET", f"/sites/{site_id}", params=params)
-        return resp.json()
-
-    # alias pratique
-    def get_site_detailed(self, site_id: int, *, embed: str = "client,category,fields"):
-        return self.get_site(site_id, embed=embed)
-
+        return self._request("GET", f"sites/{site_id}", params=params).json()
 
     def create_site(self, data: Dict[str, Any]) -> Dict[str, Any]:
         return self._post("sites", data)
@@ -226,13 +243,17 @@ class YumanClient:  # pylint: disable=too-many-public-methods
     def update_site(self, site_id: int, patch: Dict[str, Any]) -> Dict[str, Any]:
         return self._patch(f"sites/{site_id}", patch)
 
-    # ------------------------------------------------------------------
-    # Materials (equipments)
-    # ------------------------------------------------------------------
-
-    def list_materials(self, *, category_id: Optional[int] = None, per_page: int = DEFAULT_PER_PAGE,
-        since: Optional[str] = None, embed: Optional[str] = None,) -> List[Dict[str, Any]]:
-
+    # ------------------------------------------------------------------ #
+    # Materials (equipments)                                             #
+    # ------------------------------------------------------------------ #
+    def list_materials(
+        self,
+        *,
+        category_id: Optional[int] = None,
+        per_page: int = DEFAULT_PER_PAGE,
+        since: Optional[str] = None,
+        embed: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         params: Dict[str, Any] = {"perPage": per_page}
         if category_id:
             params["category_id"] = category_id
@@ -242,28 +263,19 @@ class YumanClient:  # pylint: disable=too-many-public-methods
             params["embed"] = embed
         return self._get("materials", params=params)
 
-
-
-    def get_material(self, material_id: int, *, embed: Optional[str] = None):
+    def get_material(self, material_id: int, *, embed: Optional[str] = None) -> Dict[str, Any]:
         params = {"embed": embed} if embed else None
-        resp = self._request("GET", f"/materials/{material_id}", params=params)
-        return resp.json()
-
-    def get_material_detailed(self, material_id: int):
-        return self.get_material(material_id)
-
+        return self._request("GET", f"materials/{material_id}", params=params).json()
 
     def create_material(self, data: Dict[str, Any]) -> Dict[str, Any]:
         return self._post("materials", data)
 
     def update_material(self, material_id: int, patch: Dict[str, Any]) -> Dict[str, Any]:
         return self._patch(f"materials/{material_id}", patch)
-    
 
-    # ------------------------------------------------------------------
-    # Workorders
-    # ------------------------------------------------------------------
-
+    # ------------------------------------------------------------------ #
+    # Workorders                                                         #
+    # ------------------------------------------------------------------ #
     def list_workorders(self) -> List[Dict[str, Any]]:
         return self._get("workorders")
 
@@ -276,20 +288,19 @@ class YumanClient:  # pylint: disable=too-many-public-methods
     def update_workorder(self, workorder_id: int, patch: Dict[str, Any]) -> Dict[str, Any]:
         return self._patch(f"workorders/{workorder_id}", patch)
 
-    # ------------------------------------------------------------------
-    # Utilities
-    # ------------------------------------------------------------------
-
+    # ------------------------------------------------------------------ #
+    # Utilitaires                                                        #
+    # ------------------------------------------------------------------ #
     def healthcheck(self) -> bool:
         try:
-            _ = self._request("GET", "clients", params={"page": 1, "per_page": 1})
+            self._request("GET", "clients", params={"page": 1, "perPage": 1})
             return True
         except YumanClientError as exc:
             logger.warning("Yuman healthcheck failed: %s", exc)
             return False
-        
+
     def get_category_id(self, name: str) -> Optional[int]:
-        for cat in self._get("/materials/categories"):
+        for cat in self._get("materials/categories"):
             if cat.get("name") == name:
                 return cat["id"]
         return None
