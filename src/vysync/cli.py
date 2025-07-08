@@ -86,14 +86,6 @@ def main() -> None:
     sb_adapter.apply_sites_patch(patch_sites)
     sb_adapter.apply_equips_patch(patch_equips)
 
-    # Relecture pour audit post-écriture
-    db_sites_after  = sb_adapter.fetch_sites()
-    db_equips_after = sb_adapter.fetch_equipments()
-    _dump("[CLI] DB sites after SB write",
-          {k: s.to_dict() for k, s in db_sites_after.items()})
-    _dump("[CLI] DB equips after SB write",
-          {k: e.to_dict() for k, e in db_equips_after.items()})
-
     # -----------------------------------------------------------
     # PHASE 2 – Supabase ➜ Yuman
     # -----------------------------------------------------------
@@ -106,10 +98,7 @@ def main() -> None:
 
     # --- Sites Yuman ------------------------------------------
     y_adapter.apply_sites_patch(db_sites)
-    y_sites_snapshot = y_adapter.fetch_sites()
-    _dump("[CLI] YUMAN sites snapshot",
-          {k: s.to_dict() for k, s in y_sites_snapshot.items()})
-
+    
     # --- Equipements Yuman ------------------------------------
     y_adapter.apply_equips_patch(db_equips)
     db_equips_post  = sb_adapter.fetch_equipments()

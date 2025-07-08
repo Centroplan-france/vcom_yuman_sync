@@ -112,14 +112,27 @@ class SupabaseAdapter:
         """Insère/maj les sites.  
         `patch` doit exposer `.add` et `.update` comme itérables."""
         for s in patch.add:
+            logger.debug("Site %s → %s", _.yuman_site_id, new.yuman_site_id)
             logger.debug("[SB] INSERT site %s", s.key())
             self.sb.table(SITE_TABLE).insert([s.to_dict()]).execute()
-        for _, new in patch.update:
-            logger.debug("[SB] UPDATE site %s", new.key())
-            self.sb.table(SITE_TABLE) \
-                  .update(new.to_dict()) \
-                  .eq("vcom_system_key", new.key()) \
-                  .execute()
+
+        IMMUTABLE_COLS = {"vcom_system_key", "created_at"}
+
+        for old, new in patch.update:
+            # Construire le dict des champs à updater
+            upd = {
+                k: v
+                for k, v in new.to_dict().items()
+                if v is not None               # on ignore les None
+                and k not in IMMUTABLE_COLS  # on n’override pas les colonnes immuables
+            }
+            if upd:
+                # Si yuman_site_id est absent dans VCOM, il ne sera pas dans upd
+                logger.debug("Updating sites_mapping %s → %s", old.vcom_system_key, upd)
+                self.sb.table("sites_mapping") \
+                    .update(upd) \
+                    .eq("vcom_system_key", old.vcom_system_key) \
+                    .execute()
 
         # Le cache doit refléter les nouveaux sites avant d’insérer des équipements
         self._refresh_site_cache()
@@ -183,3 +196,15 @@ class SupabaseAdapter:
                     .execute()
             except:
                 logger.exception("[SB] UPDATE failed: %s", exc)
+
+
+        # ---------- DELETE ----------
+        for e in patch.delete:
+            logger.debug("[SB] Obsolete equip %s", e.vcom_device_id)
+            try:
+                self.sb.table(EQUIP_TABLE) \
+                    .update({"is_obsolete": True, "obsolete_at": datetime.now(timezone.utc).isoformat()}) \
+                    .eq("vcom_device_id", e.vcom_device_id) \
+                    .execute()
+            except Exception as exc:
+                logger.exception("[SB] Obsolete flag failed: %s", exc)

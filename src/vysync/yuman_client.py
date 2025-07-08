@@ -136,7 +136,7 @@ class YumanClient:  # pylint: disable=too-many-public-methods
 
             # ---------------- Handle HTTP codes -------------------------
             if resp.status_code == 429:
-                retry_after = float(resp.headers.get("Retry-After", 60))
+                retry_after = float(resp.headers.get("Retry-After", 15))
                 if attempt > self.max_retry:
                     raise YumanClientError("Too many 429, giving up")
                 logger.info("HTTP 429 — retry %s in %.1fs", attempt, retry_after)

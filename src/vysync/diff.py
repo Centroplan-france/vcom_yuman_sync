@@ -10,6 +10,7 @@ Le résultat est un PatchSet (add, update, delete) sérialisable.
 
 from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, Generic, List, Tuple, TypeVar, NamedTuple
+from vysync.models import Site, Equipment
 
 T = TypeVar("T")
 
@@ -24,9 +25,15 @@ class PatchSet(NamedTuple, Generic[T]):
 
 def _equals(a: T, b: T) -> bool:
     """Égalité ‘profonde’ compatible dataclass/non-dataclass."""
-    if a is b:
-        return True
     if is_dataclass(a) and is_dataclass(b):
+        if isinstance(a, Site) and isinstance(b, Site):
+            da = asdict(a); db = asdict(b)
+            da.pop("yuman_site_id", None); db.pop("yuman_site_id", None)
+            return da == db
+        if isinstance(a, Equipment) and isinstance(b, Equipment):
+            da = asdict(a); db = asdict(b)
+            da.pop("yuman_material_id", None); db.pop("yuman_material_id", None)
+            return da == db
         return asdict(a) == asdict(b)
     return a == b
 

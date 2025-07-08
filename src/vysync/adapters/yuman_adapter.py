@@ -13,7 +13,7 @@ Synchronisation Yuman ⇄ Supabase / VCOM.
   réinjectés en base.
 """
 
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 import functools
 import logging
 import time
@@ -318,6 +318,7 @@ class YumanAdapter:
 
         # blueprints (une seule source d’infos)
         BP_MODEL          = 13548
+        BP_INVERTER_ID      = 13977 
         BP_MPPT_IDX       = STRING_FIELDS["MPPT index"]
         BP_NB_MODULES     = STRING_FIELDS["nombre de module"]
         BP_MODULE_BRAND   = STRING_FIELDS["marque du module"]
@@ -344,7 +345,7 @@ class YumanAdapter:
                 "site_id":       site_row["yuman_site_id"],
                 "category_id":   e.category_id,
                 "brand":         e.brand,
-                "serial_number": e.vcom_device_id,   # unicité garantie
+                "serial_number": e.serial_number,   # unicité garantie
                 "name":          e.name,             # onduleur prend désormais e.name
             }
 
@@ -355,11 +356,11 @@ class YumanAdapter:
                 fields.append({"blueprint_id": BP_MODEL, "value": e.model})
 
             if e.category_id == CAT_INVERTER:
-                fields.append({"name": CUSTOM_INVERTER_ID, "value": e.vcom_device_id})
+                 fields.append({"blueprint_id": BP_INVERTER_ID, "value": e.vcom_device_id})
 
             elif e.category_id == CAT_STRING:
                 try:
-                    mppt_idx = e.vcom_device_id.split("-MPPT-")[1].split(".")[0]
+                    mppt_idx = e.vcom_device_id.split("-MPPT-", 1)[1]
                 except IndexError:
                     mppt_idx = "?"
                 fields.extend([
@@ -420,7 +421,7 @@ class YumanAdapter:
             if (old.category_id == CAT_INVERTER
                     and old.vcom_device_id != new.vcom_device_id):
                 fields_patch.append(
-                    {"name": CUSTOM_INVERTER_ID, "value": new.vcom_device_id}
+                    {"blueprint_id": BP_INVERTER_ID, "value": new.vcom_device_id}
                 )
 
             # ── modèle (blueprint 13548)
