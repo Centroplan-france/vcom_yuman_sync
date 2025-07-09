@@ -258,15 +258,30 @@ class YumanAdapter:
                 "site_id":     site_row["yuman_site_id"],
                 "category_id": e.category_id,
                 "brand":       e.brand,
-                "serial_number": e.serial_number,  # unicité garantie
+                "serial_number": e.serial_number or e.vcom_device_id, # unicité garantie
                 "name":        e.name,
             }
             # Champs custom (blueprints)
             fields: List[Dict[str, Any]] = []
             if e.model:
                 fields.append({"blueprint_id": BP_MODEL, "name": "Modèle", "value": e.model})
+            if e.brand:
+                payload["brand"] = e.brand
+            if e.model:
+                payload["model"] = e.model
+            if e.serial_number:
+                payload["Numéro de série"] = e.serial_number    
+
             if e.category_id == CAT_INVERTER:
-                fields.append({"blueprint_id": BP_INVERTER_ID, "value": e.vcom_device_id})
+                fields.append({"blueprint_id": BP_INVERTER_ID,
+                               "name": "Inverter ID (Vcom)",
+                               "value": e.vcom_device_id})
+
+            # — base fields toujours remplis —
+            if e.brand:
+                payload["brand"] = e.brand
+            if e.model:
+                payload["model"] = e.model
             elif e.category_id == CAT_STRING:
                 try:
                     mppt_idx = e.vcom_device_id.split("-MPPT-", 1)[1]
@@ -288,6 +303,15 @@ class YumanAdapter:
             logger.debug("[YUMAN] create_material payload=%s", payload)
             mat = self.yc.create_material(payload)
             _dump("[YUMAN] material created", mat)
+
+            # --- 2nd step : renseigne aussitôt les champs custom (API limite) ----
+            if "fields" in payload and payload["fields"]:
+                try:
+                    self.yc.update_material(mat["id"], {"fields": payload["fields"]})
+                except Exception as exc:
+                    logger.warning("Yuman post-patch (fields) failed on %s: %s",
+                                mat["id"], exc)
+
             # Stocke l’ID Yuman nouvellement créé en DB
             (self.sb.sb.table("equipments_mapping")
                 .update({"yuman_material_id": mat["id"]})

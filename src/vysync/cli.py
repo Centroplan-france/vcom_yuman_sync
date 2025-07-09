@@ -25,6 +25,7 @@ from vysync.adapters.supabase_adapter import SupabaseAdapter
 from vysync.adapters.yuman_adapter import YumanAdapter
 from vysync.vcom_client import VCOMAPIClient
 from vysync.diff import diff_entities
+from vysync.conflict_resolution import import_yuman_sites_in_mapping, detect_and_resolve_site_conflicts
 
 # ─────────────────────────── Logger ────────────────────────────
 logger = init_logger(__name__)
@@ -56,21 +57,18 @@ def main() -> None:
     # PHASE 1 – VCOM ➜ Supabase
     # -----------------------------------------------------------
     v_sites, v_equips = fetch_snapshot(vc, vcom_system_key=site_key)
-    _dump("[CLI] VCOM raw sites",  {k: s.to_dict() for k, s in v_sites.items()})
-    _dump("[CLI] VCOM raw equips", {k: e.to_dict() for k, e in v_equips.items()})
 
     if site_key:
-        v_sites  = {k: v for k, v in v_sites.items()  if k == site_key}
-        v_equips = {k: e for k, e in v_equips.items() if e.vcom_system_key == site_key}
+        v_sites  = {k: s for k, s in v_sites.items()  if k == site_key}
+        v_equips = {k: e for k, e in v_equips.items()
+                    if e.vcom_system_key == site_key}
 
     db_sites  = sb_adapter.fetch_sites()
     db_equips = sb_adapter.fetch_equipments()
-    _dump("[CLI] DB raw sites",  {k: s.to_dict() for k, s in db_sites.items()})
-    _dump("[CLI] DB raw equips", {k: e.to_dict() for k, e in db_equips.items()})
-
     if site_key:
-        db_sites  = {k: v for k, v in db_sites.items()  if k == site_key}
-        db_equips = {k: e for k, e in db_equips.items() if e.vcom_system_key == site_key}
+        db_sites  = {k: s for k, s in db_sites.items()  if k == site_key}
+        db_equips = {k: e for k, e in db_equips.items()
+                     if e.vcom_system_key == site_key}
 
     patch_sites  = diff_entities(db_sites,  v_sites)
     patch_equips = diff_entities(db_equips, v_equips)
@@ -80,34 +78,43 @@ def main() -> None:
     logger.info("[VCOM→DB] Equips Δ  +%d  ~%d  -%d",
                 len(patch_equips.add), len(patch_equips.update), len(patch_equips.delete))
 
-    _dump("[Δ] sites patch",  patch_sites._asdict())
-    _dump("[Δ] equips patch", patch_equips._asdict())
-
     sb_adapter.apply_sites_patch(patch_sites)
     sb_adapter.apply_equips_patch(patch_equips)
 
     # -----------------------------------------------------------
-    # PHASE 2 – Supabase ➜ Yuman
+    # PHASE 1½ – Résolution manuelle des conflits de sites
     # -----------------------------------------------------------
-    db_sites  = sb_adapter.fetch_sites()
-    db_equips = sb_adapter.fetch_equipments()
+    import_yuman_sites_in_mapping(sb_adapter, y_adapter)
+    detect_and_resolve_site_conflicts(sb_adapter, y_adapter)
+
+    # Recharger Supabase (sites/équipements) après résolution
+    sb_sites  = sb_adapter.fetch_sites()
+    sb_equips = sb_adapter.fetch_equipments()
+
+    # Filtrer les sites ignorés
+    ignored_keys = {
+        r["vcom_system_key"]
+        for r in sb_adapter.sb.table("sites_mapping")
+                             .select("vcom_system_key")
+                             .eq("ignore_site", True).execute().data or []
+    }
+    sb_sites  = {k: s for k, s in sb_sites.items()  if k not in ignored_keys}
+    sb_equips = {k: e for k, e in sb_equips.items()
+                 if e.vcom_system_key not in ignored_keys}
 
     if site_key:
-        db_sites  = {k: v for k, v in db_sites.items()  if k == site_key}
-        db_equips = {k: e for k, e in db_equips.items() if e.vcom_system_key == site_key}
+        sb_sites  = {k: s for k, s in sb_sites.items()  if k == site_key}
+        sb_equips = {k: e for k, e in sb_equips.items()
+                     if e.vcom_system_key == site_key}
 
-    # --- Sites Yuman ------------------------------------------
-    y_adapter.apply_sites_patch(db_sites)
-    
-    # --- Equipements Yuman ------------------------------------
-    y_adapter.apply_equips_patch(db_equips)
-    db_equips_post  = sb_adapter.fetch_equipments()
-    y_equips_post   = y_adapter.fetch_equips()
-
-    _dump("[CLI] DB equips after YUMAN write",
-          {k: e.to_dict() for k, e in db_equips_post.items()})
-    _dump("[CLI] YUMAN equips after patch",
-          {k: e.to_dict() for k, e in y_equips_post.items()})
+    # -----------------------------------------------------------
+    # PHASE 2 – Supabase ➜ Yuman
+    # -----------------------------------------------------------
+    logger.info("[DB→YUMAN] Synchronisation des sites…")
+    y_adapter.apply_sites_patch(sb_sites)
+    logger.info("[DB→YUMAN] Synchronisation des équipements…")
+    y_adapter.apply_equips_patch(sb_equips)
+    logger.info("[DB→YUMAN] Fin synchronisation Yuman")
 
     logger.info("✅ Synchronisation terminée")
 
