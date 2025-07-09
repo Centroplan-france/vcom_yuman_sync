@@ -299,8 +299,14 @@ class YumanClient:  # pylint: disable=too-many-public-methods
             logger.warning("Yuman healthcheck failed: %s", exc)
             return False
 
-    def get_category_id(self, name: str) -> Optional[int]:
-        for cat in self._get("materials/categories"):
-            if cat.get("name") == name:
-                return cat["id"]
-        return None
+    def get_category_id(self) -> Optional[int]:
+        return self._get("materials/categories")
+            
+    
+    def get_fields(self) -> List[Dict[str, Any]]:
+        """
+        Récupère la liste de tous les champs custom de matériaux côté Yuman.
+        Appelle l’endpoint GET /materials/fields et renvoie la liste brute.
+        """
+        return self._get("materials/fields")
+    
