@@ -21,7 +21,7 @@ from vysync.models import (
 logger = init_logger(__name__)
 
 
-def fetch_snapshot(vc, vcom_system_key: str | None = None,) -> Tuple[Dict[str, Site], Dict[Tuple[str, str], Equipment]]:
+def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] | None = None) -> Tuple[Dict[str, Site], Dict[Tuple[str, str], Equipment]]:
     """Retourne deux dictionnaires : ``sites`` et ``equips``.
 
     • Si ``vcom_system_key`` est fourni, on ne récupère que ce système.  
@@ -31,14 +31,18 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None,) -> Tuple[Dict[str, S
     sites: Dict[str, Site] = {}
     equips: Dict[tuple[str, str], Equipment] = {}
 
+    
     for sys in vc.get_systems():
         key = sys["key"]
+        # -- filtre ----------------------------------------------------------------
         if vcom_system_key and key != vcom_system_key:
-            continue
+            continue                         # ① on ne veut qu’un site précis
+        if skip_keys and key in skip_keys:
+            continue                         # ② déjà connu en DB – on saute
         tech = vc.get_technical_data(key)
         det = vc.get_system_details(key)
 
-        # --- Site ------------------------------------------------------
+        # --- Site --------------------------------------------------------------------------
         site = Site(
             vcom_system_key = key,
             name            = sys.get("name") or key,

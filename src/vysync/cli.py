@@ -39,12 +39,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Synchronise VCOM ↔ Supabase ↔ Yuman via snapshot/diff"
     )
-    parser.add_argument(
-        "--site-key",
-        help="Ne traiter qu’un seul system_key VCOM",
-    )
+    parser.add_argument("--site-key",
+        help="Ne traiter qu’un seul system_key VCOM", )
+    parser.add_argument("--maj-all",  action="store_true",
+                    help="Forcer la mise à jour complète (ignorer cache DB)")
     args = parser.parse_args()
     site_key: str | None = args.site_key
+    maj_all  = args.maj_all
 
     # -----------------------------------------------------------
     # Clients / Adapters
@@ -56,14 +57,16 @@ def main() -> None:
     # -----------------------------------------------------------
     # PHASE 1 – VCOM ➜ Supabase
     # -----------------------------------------------------------
-    v_sites, v_equips = fetch_snapshot(vc, vcom_system_key=site_key)
+    # sites déjà connus (pour filtrage incrémental)
+    db_sites  = sb_adapter.fetch_sites()
+    known_sys = set(db_sites.keys())
 
+    v_sites, v_equips = fetch_snapshot(vc, vcom_system_key=site_key, skip_keys=None if maj_all or site_key else known_sys,)
     if site_key:
         v_sites  = {k: s for k, s in v_sites.items()  if k == site_key}
         v_equips = {k: e for k, e in v_equips.items()
                     if e.vcom_system_key == site_key}
 
-    db_sites  = sb_adapter.fetch_sites()
     db_equips = sb_adapter.fetch_equipments()
     if site_key:
         db_sites  = {k: s for k, s in db_sites.items()  if k == site_key}
