@@ -127,10 +127,29 @@ class VCOMAPIClient:
                     **kwargs,
                 )
 
-                # 429 : Retry-After
+                # 429 : on attend jusqu’au reset exact donné par
+                # « X-RateLimit-Reset-Minute », avec 2 s de marge.
                 if response.status_code == 429:
-                    retry_after = int(response.headers.get("Retry-After", 60))
-                    logger.warning("429 received → sleep %s s", retry_after)
+                    from datetime import datetime, timezone
+                    from email.utils import parsedate_to_datetime
+
+                    hdr = response.headers.get("X-RateLimit-Reset-Minute")
+                    if hdr:
+                        try:
+                            reset_dt = parsedate_to_datetime(hdr)          # déjà en UTC (GMT)
+                            now_utc  = datetime.now(timezone.utc)           # current UTC
+                            delta    = (reset_dt - now_utc).total_seconds()
+                            retry_after = max(int(delta) + 2, 5)            # +2 s tampon, mini 5 s
+                        except Exception as exc:                            # parse raté → fallback
+                            logger.debug("parse X-RateLimit-Reset-Minute failed: %s", exc)
+                            retry_after = int(response.headers.get("Retry-After", 30))
+                    else:
+                        retry_after = int(response.headers.get("Retry-After", 30))
+                        
+                    limit_jour = response.headers.get("X-RateLimit-Remaining-Day")
+                    reset_jour = response.headers.get("X-RateLimit-Reset-Day")
+                    logger.warning("429 received – wait %s s (reset à %s); restant jour = %s; reset jour = %s",
+                                   retry_after, hdr or "n/a", limit_jour, reset_jour)
                     time.sleep(retry_after)
                     continue
 

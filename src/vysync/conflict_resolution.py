@@ -239,51 +239,71 @@ def _ignore_site(sb, row: Dict) -> None:
 
 def _merge_sites(sb, yc: YumanClient,
                  v_row: Dict, y_row: Dict) -> None:
+    """
+    Fusionne la ligne « site » Yuman (y_row) dans la ligne VCOM (v_row).
+
+    • Les équipements sont ré-affectés.
+    • La ligne Yuman N’EST PLUS supprimée : on la neutralise pour
+      conserver l’historique et éviter la casse de requêtes tierces.
+    • La contrainte UNIQUE (yuman_site_id) est libérée avant d’être
+      ré-attribuée à la ligne VCOM.
+    """
     logger.info("[MERGE] VCOM id=%d  ⇐  Yuman id=%d", v_row["id"], y_row["id"])
 
-    # transférer équipements Yuman → VCOM
+    # 1) Ré-affecter les équipements vers la ligne VCOM
     sb.table(EQUIP_TABLE).update({"site_id": v_row["id"]}) \
                          .eq("site_id", y_row["id"]).execute()
 
-    # mettre à jour champs manquants côté VCOM
-    patch = {}
-    for col in ("aldi_id", "aldi_store_id", "project_number_cp", "client_map_id"):
+    # 2) Neutraliser la ligne Yuman (libère la clé unique)
+    sb.table(SITE_TABLE).update({
+        "yuman_site_id": None,
+        "ignore_site":   True,
+        "merged_into":   v_row["id"],          # ← nouvelle colonne (INTEGER NULL)
+    }).eq("id", y_row["id"]).execute()
+
+    # 3) Copier les champs manquants dans la ligne VCOM
+    update_fields = {}
+    for col in ("client_map_id", "aldi_id", "aldi_store_id", "project_number_cp"):
         if not v_row.get(col) and y_row.get(col):
-            patch[col] = y_row[col]
-    if y_row.get("yuman_site_id"):
-        patch["yuman_site_id"] = y_row["yuman_site_id"]
-    if patch:
-        sb.table(SITE_TABLE).update(patch).eq("id", v_row["id"]).execute()
+            update_fields[col] = y_row[col]
+    if update_fields:
+        sb.table(SITE_TABLE).update(update_fields).eq("id", v_row["id"]).execute()
 
-    # supprimer la ligne Yuman
-    sb.table(SITE_TABLE).delete().eq("id", y_row["id"]).execute()
+    # 4) Ré-attribuer le yuman_site_id libéré à la ligne VCOM
+    pending_yuman_id = y_row.get("yuman_site_id")
+    if pending_yuman_id:
+        sb.table(SITE_TABLE).update({"yuman_site_id": pending_yuman_id}) \
+                            .eq("id", v_row["id"]).execute()
 
-    # mettre à jour champ custom côté Yuman
+    # 5) Met à jour le champ custom côté Yuman (clé VCOM)
     try:
-        yc.update_site(y_row["yuman_site_id"], {
+        yc.update_site(pending_yuman_id, {
             "fields": [{
-                "blueprint_id": 13583,   # System Key (Vcom ID)
-                "name": "System Key (Vcom ID)",
-                "value": v_row["vcom_system_key"],
+                "blueprint_id": 13583,          # System Key (Vcom ID)
+                "name":         "System Key (Vcom ID)",
+                "value":        v_row["vcom_system_key"],
             }]
         })
     except Exception as exc:
         logger.warning("Yuman update_site failed : %s", exc)
 
-    # marquer le conflit résolu
+    # 6) Marquer le conflit résolu
     sb.table(CONFLICT_TABLE).update({"resolved": True, "resolved_at": _now()}) \
         .eq("entity", "site") \
-        .eq("yuman_site_id", y_row["yuman_site_id"]).execute()
+        .eq("yuman_site_id", pending_yuman_id).execute()
 
-    # log
+    # 7) Log fusion
     sb.table(SYNC_LOGS_TABLE).insert({
-        "source": "user",
-        "action": "merge_site",
-        "payload": {"from": y_row["id"], "into": v_row["id"]},
+        "source":  "user",
+        "action":  "merge_site",
+        "payload": {"from": y_row["id"], "into": v_row["id"],
+                    "yuman_site_id": pending_yuman_id},
         "created_at": _now(),
     }).execute()
 
+    # 8) Nettoyage des doublons d'équipements
     _cleanup_equipment_after_merge(sb, v_row["id"])
+
 
 
 def _cleanup_equipment_after_merge(sb, site_id: int) -> None:

@@ -12,6 +12,10 @@ from typing import Dict, List, Tuple
 
 from supabase import create_client, Client as SupabaseClient
 
+from datetime import datetime, timezone
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
 from vysync.app_logging import init_logger, _dump
 from vysync.models import (
     Site,
@@ -112,9 +116,10 @@ class SupabaseAdapter:
         """Insère/maj les sites.  
         `patch` doit exposer `.add` et `.update` comme itérables."""
         for s in patch.add:
-            logger.debug("Site %s → %s", _.yuman_site_id, new.yuman_site_id)
             logger.debug("[SB] INSERT site %s", s.key())
-            self.sb.table(SITE_TABLE).insert([s.to_dict()]).execute()
+            row = s.to_dict()
+            row["created_at"] = _now_iso()        # horodatage UTC
+            self.sb.table(SITE_TABLE).insert([row]).execute()
 
         IMMUTABLE_COLS = {"vcom_system_key", "created_at"}
 
@@ -190,12 +195,13 @@ class SupabaseAdapter:
                 continue  # rien à mettre à jour
 
             try:
-                self.sb.table(EQUIP_TABLE) \
-                    .update(upd) \
-                    .eq("vcom_device_id", new.vcom_device_id) \
-                    .execute()
-            except:
-                logger.exception("[SB] UPDATE failed: %s", exc)
+                # upsert sur (vcom_system_key, vcom_device_id)
+                self.sb.table(EQUIP_TABLE).upsert(
+                    [row],
+                    on_conflict="vcom_system_key,vcom_device_id"
+                ).execute()
+            except Exception as exc:
+                logger.exception("[SB] UPSERT failed: %s", exc)
 
 
         # ---------- DELETE ----------
