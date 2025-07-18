@@ -64,11 +64,32 @@ class SupabaseAdapter:
         return self._site_cache.get(vcom_key)
 
     # ----------------------------- SITES -------------------------------
-    def fetch_sites(self) -> Dict[str, Site]:
+    def fetch_sites_v(self) -> Dict[str, Site]:
         rows = self.sb.table(SITE_TABLE).select("*").execute().data or []
         sites: Dict[str, Site] = {}
         for r in rows:
             if not r.get("vcom_system_key"):
+                continue
+            sites[r["vcom_system_key"]] = Site(
+                vcom_system_key=r["vcom_system_key"],
+                name=r.get("name") or r["vcom_system_key"],
+                latitude=r.get("latitude"),
+                longitude=r.get("longitude"),
+                nominal_power=r.get("nominal_power"),
+                commission_date=r.get("commission_date"),
+                address=r.get("address"),
+                yuman_site_id=r.get("yuman_site_id"),
+                client_map_id=r.get("client_map_id"),
+                ignore_site=bool(r.get("ignore_site")),
+            )
+        logger.debug("[SB] fetched %s sites", len(sites))
+        return sites
+
+    def fetch_sites_y(self) -> Dict[str, Site]:
+        rows = self.sb.table(SITE_TABLE).select("*").execute().data or []
+        sites: Dict[str, Site] = {}
+        for r in rows:
+            if not r.get("yuman_site_id"):
                 continue
             sites[r["vcom_system_key"]] = Site(
                 vcom_system_key=r["vcom_system_key"],
