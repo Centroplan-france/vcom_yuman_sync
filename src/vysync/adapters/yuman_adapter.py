@@ -226,53 +226,77 @@ class YumanAdapter:
     #  SNAPSHOTS                                                         #
     # ------------------------------------------------------------------ #
     def fetch_sites(self) -> Dict[str, Site]:
-        """Retourne tous les sites Yuman mappés (clef : vcom_system_key)."""
-        sites: Dict[str, Site] = {}
-        for s in self.yc.list_sites(embed="fields,client"):
-            # Récupère les custom fields sous forme de dict {nom: valeur}
-            cvals = {
-                f["name"]: f.get("value")
-                for f in s.get("_embed", {}).get("fields", [])
-            }
-
-            # Clé VCOM
-            vcom_key = cvals.get("System Key (Vcom ID)")
-            if not vcom_key:
-                continue  # site non mappé
-
-            aldi_id           = (cvals.get("ALDI ID") or "").strip() or None
-            aldi_store_id     = (cvals.get("ID magasin (n° interne Aldi)") or "").strip() or None
-            project_number_cp = (cvals.get("Project number (Centroplan ID)") or "").strip() or None
-
-            # Normalisation de la date de commission
-            raw_cd = cvals.get("Commission Date")  # ex. "29/04/2025" ou "2025-04-29"
-            if raw_cd and "/" in raw_cd:
-                # transforme "JJ/MM/AAAA" → "AAAA-MM-JJ"
-                j, m, a = raw_cd.split("/")[:3]
-                commission_iso = f"{a}-{m.zfill(2)}-{j.zfill(2)}"
-            else:
-                commission_iso = raw_cd  # on laisse passer le ISO s’il est déjà au bon format
-
-            sites[vcom_key] = Site(
-                vcom_system_key=vcom_key,
-                name=s.get("name"),
-                address=s.get("address"),
-                commission_date=commission_iso,
-                nominal_power=(
-                    float(cvals["Nominal Power (kWc)"])
-                    if cvals.get("Nominal Power (kWc)") else None
-                ),
-                latitude=s.get("latitude"),
-                longitude=s.get("longitude"),
-                yuman_site_id=s["id"],
-                aldi_id           = aldi_id,
-                aldi_store_id     = aldi_store_id,
-                project_number_cp = project_number_cp,
-            )
-
-        logger.debug("[YUMAN] snapshot: %s sites", len(sites))
-        _dump("[YUMAN] snapshot sites", sites)
-        return sites
+      """
+      Retourne un dictionnaire de *tous* les sites Yuman.
+  
+      ➜  Clé du dictionnaire
+          - Si le champ « System Key (Vcom ID) » est présent : on garde vcom_system_key (clé historique).
+          - Sinon : on utilise la chaîne spéciale f"yuman:{site_id}" pour éviter les collisions.
+            Ainsi, les sites sans clé VCOM sont quand‑même dans le snapshot, mais isolés
+            des clés VCOM existantes.
+      """
+      sites: Dict[str, Site] = {}
+  
+      # 1) Itération brute de l’API Yuman
+      for s in self.yc.list_sites(embed="fields,client"):
+          # --- Custom fields → dict {nom: valeur}
+          cvals = {
+              f["name"]: f.get("value")
+              for f in s.get("_embed", {}).get("fields", [])
+          }
+  
+          vcom_key = (cvals.get("System Key (Vcom ID)") or "").strip() or None
+  
+          # Champs optionnels
+          aldi_id           = (cvals.get("ALDI ID")                    or "").strip() or None
+          aldi_store_id     = (cvals.get("ID magasin (n° interne Aldi)") or "").strip() or None
+          project_number_cp = (cvals.get("Project number (Centroplan ID)") or "").strip() or None
+  
+          # Date de commission → ISO
+          raw_cd = (cvals.get("Commission Date") or "").strip()
+          if raw_cd and "/" in raw_cd:            # "JJ/MM/AAAA"
+              j, m, a = raw_cd.split("/")[:3]
+              commission_iso = f"{a}-{m.zfill(2)}-{j.zfill(2)}"
+          else:
+              commission_iso = raw_cd or None     # "" → None
+  
+          # --- Construction de l’objet Site
+          site_obj = Site(
+              vcom_system_key = vcom_key,
+              name            = s.get("name"),
+              address         = s.get("address"),
+              commission_date = commission_iso,
+              nominal_power   = (
+                  float(cvals["Nominal Power (kWc)"])
+                  if cvals.get("Nominal Power (kWc)") else None
+              ),
+              latitude        = s.get("latitude"),
+              longitude       = s.get("longitude"),
+              yuman_site_id   = s["id"],
+              aldi_id           = aldi_id,
+              aldi_store_id     = aldi_store_id,
+              project_number_cp = project_number_cp,
+          )
+  
+          # --- Choix de la clé du dict
+          key = vcom_key if vcom_key else f"yuman:{s['id']}"
+  
+          # Collisions improbables : si deux sites partagent le même VCOM key,
+          # on garde le premier et log un warning.
+          if key in sites:
+              logger.warning(
+                  "[YUMAN] Duplicate key %s (site IDs %s, %s)",
+                  key, sites[key].yuman_site_id, s["id"]
+              )
+              continue
+  
+          sites[key] = site_obj
+  
+      logger.debug("[YUMAN] snapshot: %d sites (dont %d sans SystemKey)",
+                   len(sites),
+                   sum(1 for k in sites if k.startswith("yuman:")))
+      _dump("[YUMAN] snapshot sites", sites)
+      return sites
 
     # ------------------------------------------------------------------ #
     #  LECTURE DES ÉQUIPEMENTS YUMAN                                     #
