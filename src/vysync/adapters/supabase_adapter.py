@@ -107,7 +107,7 @@ class SupabaseAdapter:
         return sites
 
     # --------------------------- EQUIPMENTS ----------------------------
-    def fetch_equipments(self) -> Dict[str, Equipment]:
+    def fetch_equipments_v(self) -> Dict[str, Equipment]:
         equips = {}
         from_row, step = 0, 1000       # page de 1 000
         while True:
@@ -122,6 +122,39 @@ class SupabaseAdapter:
             )
             for r in page:
                 equips[r["vcom_device_id"]] = Equipment(
+                    vcom_system_key=r["vcom_system_key"],
+                    category_id=r["category_id"],
+                    eq_type=r["eq_type"],
+                    vcom_device_id=r["vcom_device_id"],
+                    name=r["name"],
+                    brand=r.get("brand"),
+                    model=r.get("model"),
+                    serial_number=r.get("serial_number"),
+                    count=r.get("count"),
+                    parent_id=r.get("parent_id"),
+                    yuman_material_id=r.get("yuman_material_id"),
+                )
+            if len(page) < step:
+                break        # dernière page atteinte
+            from_row += step
+        logger.debug("[SB] fetched %s equipments", len(equips))
+        return equips
+
+    def fetch_equipments_y(self) -> Dict[str, Equipment]:
+        equips = {}
+        from_row, step = 0, 1000       # page de 1 000
+        while True:
+            page = (
+                self.sb.table(EQUIP_TABLE)
+                .select("*")
+                .in_("category_id", [CAT_INVERTER, CAT_MODULE, CAT_STRING])
+                .eq("is_obsolete", False)
+                .range(from_row, from_row + step - 1)   # pagination
+                .execute()
+                .data or []
+            )
+            for r in page:
+                equips[r["yuman_material_id"]] = Equipment(
                     vcom_system_key=r["vcom_system_key"],
                     category_id=r["category_id"],
                     eq_type=r["eq_type"],
