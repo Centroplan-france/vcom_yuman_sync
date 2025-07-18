@@ -253,13 +253,9 @@ class VCOMAPIClient:
         return self._make_request("GET", f"/systems/{system_key}/inverters/{inverter_id}").json().get("data", {})
 
     # -- Tickets --------------------------------------------------------
-    def get_tickets(
-        self,
-        status: str | None = None,
-        priority: str | None = None,
-        system_key: str | None = None,
-        **filters,
-    ) -> List[Dict[str, Any]]:
+    def get_tickets(self, status: str | None = None, priority: str | None = None,
+        system_key: str | None = None, **filters,) -> List[Dict[str, Any]]:
+            
         params: Dict[str, Any] = {**filters}
         if status:
             params["status"] = status
@@ -278,4 +274,9 @@ class VCOMAPIClient:
         return resp.status_code == 204
 
     def close_ticket(self, ticket_id: str, summary: str = "Closed via API") -> bool:
+        delete_outage(ticket_id)
         return self.update_ticket(ticket_id, status="closed", summary=summary)
+
+    def delete_outage(self, ticket_id: str) -> bool:
+        resp = self._make_request("DELETE", f"/tickets/{ticket_id}/outage")
+        return resp.status_code == 204
