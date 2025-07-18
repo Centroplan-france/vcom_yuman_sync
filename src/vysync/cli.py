@@ -62,8 +62,8 @@ def main() -> None:
     # -----------------------------------------------------------
     # PHASE 1 A – VCOM → Supabase
     # -----------------------------------------------------------
-    db_sites   = sb.fetch_sites()
-    db_equips  = sb.fetch_equipments()
+    db_sites   = sb.fetch_sites_v()
+    db_equips  = sb.fetch_equipments_v()
     known_sys  = set(db_sites.keys())
 
     # snapshot VCOM
@@ -114,8 +114,8 @@ def main() -> None:
 
     # 2) on lit en base les mappings existants
     db_clients = sb.fetch_clients()      # -> Dict[int, Client]
-    db_maps_sites  = sb.fetch_sites()    # -> Dict[int, SiteMapping]
-    db_maps_equips = sb.fetch_equipments()   # -> Dict[str, EquipMapping]
+    db_maps_sites  = sb.fetch_sites_y()    # -> Dict[int, SiteMapping]
+    db_maps_equips = sb.fetch_equipments_y()   # -> Dict[str, EquipMapping]
 
     # 3) on génère des patchs « fill missing » (pas de supprimer)
     patch_clients = diff_fill_missing(db_clients,     {c["id"]: c for c in y_clients})
@@ -159,8 +159,8 @@ def main() -> None:
     y_sites   = y.fetch_sites()
     y_equips  = y.fetch_equips()
     
-    sb_sites  = sb.fetch_sites()
-    sb_equips = sb.fetch_equipments()
+    sb_sites  = sb.fetch_sites_y()
+    sb_equips = sb.fetch_equipments_y()
     # ➔ (filtrage ignore_site / site_key idem)
     sb_sites = {k: s for k, s in sb_sites.items() if not getattr(s, "ignore_site", False)}
 
