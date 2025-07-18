@@ -255,42 +255,10 @@ def _merge_sites(sb, yc: YumanClient,
     """
     logger.info("[MERGE] VCOM id=%d  ⇐  Yuman id=%d", v_row["id"], y_row["id"])
 
-    # 1) Ré-affecter les équipements vers la ligne VCOM
-    sb.table(EQUIP_TABLE).update({"site_id": v_row["id"]}) \
-                         .eq("site_id", y_row["id"]).execute()
-
-    # 2) Neutraliser la ligne Yuman (libère la clé unique)
-    sb.table(SITE_TABLE).update({
-        "yuman_site_id": None,
-        "ignore_site":   True,
-        "merged_into":   v_row["id"],          # ← nouvelle colonne (INTEGER NULL)
-    }).eq("id", y_row["id"]).execute()
-
-    # 3) Copier les champs manquants dans la ligne VCOM
-    update_fields = {}
-    for col in ("client_map_id", "aldi_id", "aldi_store_id", "project_number_cp"):
-        if not v_row.get(col) and y_row.get(col):
-            update_fields[col] = y_row[col]
-    if update_fields:
-        sb.table(SITE_TABLE).update(update_fields).eq("id", v_row["id"]).execute()
-
-    # 4) Ré-attribuer le yuman_site_id libéré à la ligne VCOM
-    pending_yuman_id = y_row.get("yuman_site_id")
-    if pending_yuman_id:
-        sb.table(SITE_TABLE).update({"yuman_site_id": pending_yuman_id}) \
-                            .eq("id", v_row["id"]).execute()
-
-    # 5) Met à jour le champ custom côté Yuman (clé VCOM)
-    try:
-        yc.update_site(pending_yuman_id, {
-            "fields": [{
-                "blueprint_id": 13583,          # System Key (Vcom ID)
-                "name":         "System Key (Vcom ID)",
-                "value":        v_row["vcom_system_key"],
-            }]
-        })
-    except Exception as exc:
-        logger.warning("Yuman update_site failed : %s", exc)
+    sb.rpc("merge_sites", {
+        "vcom_id": v_row["id"],
+        "yuman_id": y_row["id"],
+    }).execute()
 
     # 6) Marquer le conflit résolu
     sb.table(CONFLICT_TABLE).update({"resolved": True, "resolved_at": _now()}) \
