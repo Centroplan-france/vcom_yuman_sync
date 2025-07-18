@@ -24,8 +24,8 @@ from vysync.adapters.vcom_adapter import fetch_snapshot
 from vysync.adapters.supabase_adapter import SupabaseAdapter
 from vysync.adapters.yuman_adapter import YumanAdapter
 from vysync.vcom_client import VCOMAPIClient
-from vysync.diff import diff_entities
-from vysync.conflict_resolution import import_yuman_sites_in_mapping, detect_and_resolve_site_conflicts
+from vysync.diff import diff_entities, diff_fill_missing
+from vysync.conflict_resolution import detect_and_resolve_site_conflicts, resolve_clients_for_sites
 
 # ─────────────────────────── Logger ────────────────────────────
 logger = init_logger(__name__)
@@ -39,85 +39,155 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Synchronise VCOM ↔ Supabase ↔ Yuman via snapshot/diff"
     )
-    parser.add_argument("--site-key",
-        help="Ne traiter qu’un seul system_key VCOM", )
-    parser.add_argument("--maj-all",  action="store_true",
-                    help="Forcer la mise à jour complète (ignorer cache DB)")
+    parser.add_argument(
+        "--site-key",
+        help="Ne traiter qu’un seul system_key VCOM",
+    )
+    parser.add_argument(
+        "--maj-all",
+        action="store_true",
+        help="Forcer la mise à jour complète (ignorer cache DB)",
+    )
     args = parser.parse_args()
     site_key: str | None = args.site_key
-    maj_all  = args.maj_all
+    maj_all = args.maj_all
 
     # -----------------------------------------------------------
     # Clients / Adapters
     # -----------------------------------------------------------
-    vc          = VCOMAPIClient()
-    sb_adapter  = SupabaseAdapter()
-    y_adapter   = YumanAdapter(sb_adapter)
+    vc = VCOMAPIClient()
+    sb = SupabaseAdapter()
+    y  = YumanAdapter(sb)
 
     # -----------------------------------------------------------
-    # PHASE 1 – VCOM ➜ Supabase
+    # PHASE 1 A – VCOM → Supabase
     # -----------------------------------------------------------
-    # sites déjà connus (pour filtrage incrémental)
-    db_sites  = sb_adapter.fetch_sites()
-    known_sys = set(db_sites.keys())
+    db_sites   = sb.fetch_sites()
+    db_equips  = sb.fetch_equipments()
+    known_sys  = set(db_sites.keys())
 
-    v_sites, v_equips = fetch_snapshot(vc, vcom_system_key=site_key, skip_keys=None if maj_all or site_key else known_sys,)
+    # snapshot VCOM
+    v_sites, v_equips = fetch_snapshot(
+        vc,
+        vcom_system_key=site_key,
+        skip_keys=None if maj_all or site_key else known_sys,
+    )
     if site_key:
-        v_sites  = {k: s for k, s in v_sites.items()  if k == site_key}
-        v_equips = {k: e for k, e in v_equips.items()
-                    if e.vcom_system_key == site_key}
+        v_sites  = {k: s for k, s in v_sites.items() if k == site_key}
+        v_equips = {k: e for k, e in v_equips.items() if e.vcom_system_key == site_key}
 
-    db_equips = sb_adapter.fetch_equipments()
-    if site_key:
-        db_sites  = {k: s for k, s in db_sites.items()  if k == site_key}
-        db_equips = {k: e for k, e in db_equips.items()
-                     if e.vcom_system_key == site_key}
+    # filtrage incrémental
+    if not maj_all and not site_key:
+        seen = set(v_sites)
+        db_sites  = {k: s for k, s in db_sites.items()  if k in seen}
+        db_equips = {k: e for k, e in db_equips.items() if e.vcom_system_key in seen}
 
+    # diff & patch
     patch_sites  = diff_entities(db_sites,  v_sites)
     patch_equips = diff_entities(db_equips, v_equips)
 
-    logger.info("[VCOM→DB] Sites  Δ  +%d  ~%d  -%d",
-                len(patch_sites.add), len(patch_sites.update), len(patch_sites.delete))
-    logger.info("[VCOM→DB] Equips Δ  +%d  ~%d  -%d",
-                len(patch_equips.add), len(patch_equips.update), len(patch_equips.delete))
+    logger.info(
+        "[VCOM→DB] Sites  Δ  +%d  ~%d  -%d",
+        len(patch_sites.add),
+        len(patch_sites.update),
+        len(patch_sites.delete),
+    )
+    logger.info(
+        "[VCOM→DB] Equips Δ  +%d  ~%d  -%d",
+        len(patch_equips.add),
+        len(patch_equips.update),
+        len(patch_equips.delete),
+    )
 
-    sb_adapter.apply_sites_patch(patch_sites)
-    sb_adapter.apply_equips_patch(patch_equips)
-
-    # -----------------------------------------------------------
-    # PHASE 1½ – Résolution manuelle des conflits de sites
-    # -----------------------------------------------------------
-    import_yuman_sites_in_mapping(sb_adapter, y_adapter)
-    detect_and_resolve_site_conflicts(sb_adapter, y_adapter)
-
-    # Recharger Supabase (sites/équipements) après résolution
-    sb_sites  = sb_adapter.fetch_sites()
-    sb_equips = sb_adapter.fetch_equipments()
-
-    # Filtrer les sites ignorés
-    ignored_keys = {
-        r["vcom_system_key"]
-        for r in sb_adapter.sb.table("sites_mapping")
-                             .select("vcom_system_key")
-                             .eq("ignore_site", True).execute().data or []
-    }
-    sb_sites  = {k: s for k, s in sb_sites.items()  if k not in ignored_keys}
-    sb_equips = {k: e for k, e in sb_equips.items()
-                 if e.vcom_system_key not in ignored_keys}
-
-    if site_key:
-        sb_sites  = {k: s for k, s in sb_sites.items()  if k == site_key}
-        sb_equips = {k: e for k, e in sb_equips.items()
-                     if e.vcom_system_key == site_key}
+    sb.apply_sites_patch(patch_sites)
+    sb.apply_equips_patch(patch_equips)
 
     # -----------------------------------------------------------
-    # PHASE 2 – Supabase ➜ Yuman
+    # PHASE 1 B – YUMAN → Supabase (mapping)
+    # -----------------------------------------------------------
+    logger.info("[YUMAN→DB] snapshot & patch fill‑missing …")
+
+    # 1) on prend UN SEUL snapshot Yuman
+    y_clients = list(y.yc.list_clients())
+    y_sites   = y.fetch_sites()
+    y_equips  = y.fetch_equips()
+
+    # 2) on lit en base les mappings existants
+    db_clients = sb.fetch_clients()      # -> Dict[int, Client]
+    db_maps_sites  = sb.fetch_sites()    # -> Dict[int, SiteMapping]
+    db_maps_equips = sb.fetch_equipments()   # -> Dict[str, EquipMapping]
+
+    # 3) on génère des patchs « fill missing » (pas de supprimer)
+    patch_clients = diff_fill_missing(db_clients,     {c["id"]: c for c in y_clients})
+    patch_maps_sites  = diff_fill_missing(db_maps_sites,  y_sites)
+    patch_maps_equips = diff_fill_missing(db_maps_equips, y_equips)
+
+    logger.info(
+        "[YUMAN→DB] Clients Δ +%d  ~%d  -%d",
+        len(patch_clients.add),
+        len(patch_clients.update),
+        len(patch_clients.delete),
+    )
+    logger.info(
+        "[YUMAN→DB] SitesMapping  Δ +%d  ~%d  -%d",
+        len(patch_maps_sites.add),
+        len(patch_maps_sites.update),
+        len(patch_maps_sites.delete),
+    )
+    logger.info(
+        "[YUMAN→DB] EquipsMapping Δ +%d  ~%d  -%d",
+        len(patch_maps_equips.add),
+        len(patch_maps_equips.update),
+        len(patch_maps_equips.delete),
+    )
+
+    # 4) on ré‑utilise les mêmes apply_*_patch de SupabaseAdapter
+    sb.apply_clients_mapping_patch(patch_clients)
+    sb.apply_sites_patch(patch_maps_sites)
+    sb.apply_equips_patch(patch_maps_equips)
+
+    # -----------------------------------------------------------
+    # PHASE 1 C – Résolution manuelle des conflits de sites
+    # -----------------------------------------------------------
+    logger.info("[CONFLIT] début de la résolution des conflits …")
+    detect_and_resolve_site_conflicts(sb, y)
+    resolve_clients_for_sites(sb, y)
+
+    # --- re‑charge Supabase après résolution
+    sb_sites  = sb.fetch_sites()
+    sb_equips = sb.fetch_equipments()
+    # ➔ (filtrage ignore_site / site_key idem)
+
+    # -----------------------------------------------------------
+    # PHASE 2 – Supabase ➜ Yuman  (diff + patch SANS refetch)
     # -----------------------------------------------------------
     logger.info("[DB→YUMAN] Synchronisation des sites…")
-    y_adapter.apply_sites_patch(sb_sites)
+    patch_s = diff_entities(y_sites, sb_sites)
+    logger.info(
+        "[DB→YUMAN] Sites Δ  +%d  ~%d  -%d",
+        len(patch_s.add),
+        len(patch_s.update),
+        len(patch_s.delete),
+    )
+    y.apply_sites_patch(
+        db_sites=sb_sites,
+        y_sites=y_sites,
+        patch=patch_s,
+    )
+
     logger.info("[DB→YUMAN] Synchronisation des équipements…")
-    y_adapter.apply_equips_patch(sb_equips)
-    logger.info("[DB→YUMAN] Fin synchronisation Yuman")
+    patch_e = diff_entities(y_equips, sb_equips)
+    logger.info(
+        "[DB→YUMAN] Equips Δ  +%d  ~%d  -%d",
+        len(patch_e.add),
+        len(patch_e.update),
+        len(patch_e.delete),
+    )
+    y.apply_equips_patch(
+        db_equips=sb_equips,
+        y_equips=y_equips,
+        patch=patch_e,
+    )
 
     logger.info("✅ Synchronisation terminée")
 

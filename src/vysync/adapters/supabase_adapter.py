@@ -20,6 +20,7 @@ from vysync.app_logging import init_logger, _dump
 from vysync.models import (
     Site,
     Equipment,
+    Client,
     CAT_INVERTER,
     CAT_MODULE,
     CAT_STRING,
@@ -78,36 +79,43 @@ class SupabaseAdapter:
                 commission_date=r.get("commission_date"),
                 address=r.get("address"),
                 yuman_site_id=r.get("yuman_site_id"),
+                client_map_id=r.get("client_map_id"),
+                ignore_site=bool(r.get("ignore_site")),
             )
         logger.debug("[SB] fetched %s sites", len(sites))
         return sites
 
     # --------------------------- EQUIPMENTS ----------------------------
     def fetch_equipments(self) -> Dict[str, Equipment]:
-        rows = (
-            self.sb.table(EQUIP_TABLE)
-            .select("*")
-            .in_("category_id", [CAT_INVERTER, CAT_MODULE, CAT_STRING])
-            .eq("is_obsolete", False)
-            .execute()
-            .data
-            or []
-        )
-        equips: Dict[str, Equipment] = {}
-        for r in rows:
-            equips[r["vcom_device_id"]] = Equipment(
-                vcom_system_key=r["vcom_system_key"],
-                category_id=r["category_id"],
-                eq_type=r["eq_type"],
-                vcom_device_id=r["vcom_device_id"],
-                name=r["name"],
-                brand=r.get("brand"),
-                model=r.get("model"),
-                serial_number=r.get("serial_number"),
-                count=r.get("count"),
-                parent_id=r.get("parent_id"),
-                yuman_material_id=r.get("yuman_material_id"),
+        equips = {}
+        from_row, step = 0, 1000       # page de 1 000
+        while True:
+            page = (
+                self.sb.table(EQUIP_TABLE)
+                .select("*")
+                .in_("category_id", [CAT_INVERTER, CAT_MODULE, CAT_STRING])
+                .eq("is_obsolete", False)
+                .range(from_row, from_row + step - 1)   # pagination
+                .execute()
+                .data or []
             )
+            for r in page:
+                equips[r["vcom_device_id"]] = Equipment(
+                    vcom_system_key=r["vcom_system_key"],
+                    category_id=r["category_id"],
+                    eq_type=r["eq_type"],
+                    vcom_device_id=r["vcom_device_id"],
+                    name=r["name"],
+                    brand=r.get("brand"),
+                    model=r.get("model"),
+                    serial_number=r.get("serial_number"),
+                    count=r.get("count"),
+                    parent_id=r.get("parent_id"),
+                    yuman_material_id=r.get("yuman_material_id"),
+                )
+            if len(page) < step:
+                break        # dernière page atteinte
+            from_row += step
         logger.debug("[SB] fetched %s equipments", len(equips))
         return equips
 
@@ -174,8 +182,8 @@ class SupabaseAdapter:
             logger.debug("[SB] INSERT equip %s", row["vcom_device_id"])
             _dump("[SB] row inserted", row)
             try:
-                self.sb.table(EQUIP_TABLE).insert([row]).execute()
-            except:
+                self.sb.table(EQUIP_TABLE).upsert([row], on_conflict="vcom_device_id",).execute()
+            except Exception as exc:
                 logger.exception("[SB] INSERT failed: %s", exc)
 
         # ---------- UPDATE ----------
@@ -195,11 +203,10 @@ class SupabaseAdapter:
                 continue  # rien à mettre à jour
 
             try:
-                # upsert sur (vcom_system_key, vcom_device_id)
-                self.sb.table(EQUIP_TABLE).upsert(
-                    [row],
-                    on_conflict="vcom_system_key,vcom_device_id"
-                ).execute()
+                self.sb.table(EQUIP_TABLE) \
+                    .update(upd) \
+                    .eq("vcom_device_id", new.vcom_device_id) \
+                    .execute()
             except Exception as exc:
                 logger.exception("[SB] UPSERT failed: %s", exc)
 
@@ -214,3 +221,62 @@ class SupabaseAdapter:
                     .execute()
             except Exception as exc:
                 logger.exception("[SB] Obsolete flag failed: %s", exc)
+
+
+    def fetch_clients(self) -> Dict[int, Client]:
+        """
+        Lit la table `clients_mapping` et renvoie un dict
+        { yuman_client_id → Client(...) }.
+        """
+        rows = (
+            self.sb
+                .table("clients_mapping")
+                .select("yuman_client_id,code,name,address")
+                .execute()
+                .data
+            or []
+        )
+        clients: Dict[int, Client] = {}
+        for r in rows:
+            yid = r.get("yuman_client_id")
+            if not yid:
+                continue
+            clients[yid] = Client(
+                yuman_client_id=yid,
+                code=            r.get("code"),
+                name=            r["name"],
+                address=         r.get("address"),
+            )
+        return clients
+    
+    def apply_clients_mapping_patch(self, patch) -> None:
+        """
+        Applique en base Supabase lePatchSet[Client] sur la table `clients_mapping`.
+        • insert les nouveaux clients (patch.add)  
+        • update les clients existants (patch.update)
+        """
+        # INSERT / UPSERT des nouveaux clients
+        for client in patch.add:
+            row = client.to_dict()
+            # garantir un created_at
+            row.setdefault(
+                "created_at",
+                datetime.now(timezone.utc).isoformat()
+            )
+            # on upsert pour éviter doublons si jamais
+            self.sb.table("clients_mapping") \
+                .upsert(row, on_conflict="yuman_client_id") \
+                .execute()
+
+        # MISE À JOUR des clients existants
+        for old, new in patch.update:
+            updates: dict[str, any] = {}
+            if old.code    != new.code:    updates["code"]    = new.code
+            if old.name    != new.name:    updates["name"]    = new.name
+            if old.address != new.address: updates["address"] = new.address
+
+            if updates:
+                self.sb.table("clients_mapping") \
+                    .update(updates) \
+                    .eq("yuman_client_id", new.yuman_client_id) \
+                    .execute()

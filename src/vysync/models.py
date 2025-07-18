@@ -20,6 +20,11 @@ class Site:
     commission_date: Optional[str] = None  # ISO
     address: Optional[str] = None
     yuman_site_id: Optional[int] = None
+    client_map_id: Optional[int] = None       # ← nouveau
+    ignore_site:   bool = False    
+    aldi_id: Optional[str] = None                   # "ALDI ID"
+    aldi_store_id: Optional[str] = None             # "ID magasin (n° interne Aldi)"
+    project_number_cp: Optional[str] = None         # "Project number (Centroplan ID)"           # ← pratique pour les filtres
 
     def key(self) -> str:
         return self.vcom_system_key
@@ -66,6 +71,7 @@ class Client:
     yuman_client_id: int
     code: Optional[str]
     name: str
+    address: Optional[str]
 
     def key(self) -> int:
         return self.yuman_client_id

@@ -7,7 +7,7 @@ import logging
 import os
 import time
 from typing import Any, Dict, List
-
+import json
 import requests
 
 from .app_logging import init_logger
@@ -102,7 +102,7 @@ class VCOMAPIClient:
     # Requête HTTP bas niveau                                             #
     # ------------------------------------------------------------------ #
     def _make_request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
-        """Effectue une requête avec retry & rate-limit."""
+        """Effectue une requête avec retry, rate-limit et debug logging."""
 
         self._enforce_rate_limit()
         url = f"{self.BASE_URL}/{endpoint.lstrip('/')}"
@@ -116,9 +116,17 @@ class VCOMAPIClient:
             local_headers = self.session.headers
 
         max_attempts = 3
-        for attempt in range(max_attempts):
+        for attempt in range(1, max_attempts + 1):
             try:
-                logger.debug("%s %s (attempt %d)", method.upper(), endpoint, attempt + 1)
+                # --- Debug: requête sortante ---
+                body = kwargs.get("json") or kwargs.get("data")
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "[API ➜] %s %s payload=%s",
+                        method.upper(), endpoint,
+                        None if body is None else json.dumps(body, ensure_ascii=False, default=str)[:1500]
+                    )
+
                 response = self.session.request(
                     method,
                     url,
@@ -127,8 +135,18 @@ class VCOMAPIClient:
                     **kwargs,
                 )
 
-                # 429 : on attend jusqu’au reset exact donné par
-                # « X-RateLimit-Reset-Minute », avec 2 s de marge.
+                # --- Debug: réponse entrante ---
+                if logger.isEnabledFor(logging.DEBUG):
+                    try:
+                        resp_body = json.dumps(response.json(), ensure_ascii=False, sort_keys=True)[:1500]
+                    except ValueError:
+                        resp_body = response.text[:1500]
+                    logger.debug(
+                        "[API ⇠] %s %s status=%s\nresp=%s",
+                        method.upper(), endpoint, response.status_code, resp_body
+                    )
+
+                # 429 handling
                 if response.status_code == 429:
                     from datetime import datetime, timezone
                     from email.utils import parsedate_to_datetime
@@ -136,28 +154,29 @@ class VCOMAPIClient:
                     hdr = response.headers.get("X-RateLimit-Reset-Minute")
                     if hdr:
                         try:
-                            reset_dt = parsedate_to_datetime(hdr)          # déjà en UTC (GMT)
-                            now_utc  = datetime.now(timezone.utc)           # current UTC
-                            delta    = (reset_dt - now_utc).total_seconds()
-                            retry_after = max(int(delta) + 2, 5)            # +2 s tampon, mini 5 s
-                        except Exception as exc:                            # parse raté → fallback
-                            logger.debug("parse X-RateLimit-Reset-Minute failed: %s", exc)
+                            reset_dt = parsedate_to_datetime(hdr)
+                            now_utc = datetime.now(timezone.utc)
+                            delta = (reset_dt - now_utc).total_seconds()
+                            retry_after = max(int(delta) + 2, 5)
+                        except Exception as exc:
+                            logger.debug("Parse X-RateLimit-Reset-Minute failed: %s", exc)
                             retry_after = int(response.headers.get("Retry-After", 30))
                     else:
                         retry_after = int(response.headers.get("Retry-After", 30))
-                        
+
                     limit_jour = response.headers.get("X-RateLimit-Remaining-Day")
                     reset_jour = response.headers.get("X-RateLimit-Reset-Day")
-                    logger.warning("429 received – wait %s s (reset à %s); restant jour = %s; reset jour = %s",
-                                   retry_after, hdr or "n/a", limit_jour, reset_jour)
+                    logger.warning(
+                        "429 reçu – attente %s s (reset à %s); restant jour = %s; reset jour = %s",
+                        retry_after, hdr or "n/a", limit_jour, reset_jour
+                    )
                     time.sleep(retry_after)
                     continue
 
-                # ≥500 : retry exponentiel
-                if 500 <= response.status_code < 600 and attempt < max_attempts - 1:
-                    backoff = 2 ** attempt
-                    logger.warning("Server %s → retry in %s s",
-                                   response.status_code, backoff)
+                # 5xx retry
+                if 500 <= response.status_code < 600 and attempt < max_attempts:
+                    backoff = 2 ** (attempt - 1)
+                    logger.warning("Server %s → retry in %s s", response.status_code, backoff)
                     time.sleep(backoff)
                     continue
 
@@ -168,16 +187,17 @@ class VCOMAPIClient:
                 return response
 
             except requests.RequestException as exc:
+                # Debug: exception
+                logger.error("Request error (attempt %d) : %s", attempt, exc)
                 self._consecutive_errors += 1
-                logger.error("Request error (attempt %d) : %s", attempt + 1, exc)
-                if attempt < max_attempts - 1:
-                    backoff = 2 ** attempt
+                if attempt < max_attempts:
+                    backoff = 2 ** (attempt - 1)
                     logger.info("Retry in %s s", backoff)
                     time.sleep(backoff)
                 else:
                     raise
 
-        raise RuntimeError("Maximum attempts reached for %s %s" % (method, endpoint))
+        raise RuntimeError(f"Maximum attempts reached for {method.upper()} {endpoint}")
 
     # ------------------------------------------------------------------ #
     # Logs quota                                                          #

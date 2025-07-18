@@ -106,7 +106,7 @@ class YumanClient:  # pylint: disable=too-many-public-methods
                     logger.debug(
                         "[YUMAN ➜] %s %s payload=%s",
                         method, endpoint,
-                        None if body is None else json.dumps(body, ensure_ascii=False, default=str)
+                        None if body is None else json.dumps(body, ensure_ascii=False, default=str)[:1500]
                     )
 
                 resp: Response = self.session.request(
@@ -118,9 +118,9 @@ class YumanClient:  # pylint: disable=too-many-public-methods
 
                 if logger.isEnabledFor(logging.DEBUG):
                     try:
-                        dbg_resp = json.dumps(resp.json(), ensure_ascii=False, sort_keys=True)[:800]
+                        dbg_resp = json.dumps(resp.json(), ensure_ascii=False, sort_keys=True)[:1500]
                     except ValueError:
-                        dbg_resp = resp.text[:800]
+                        dbg_resp = resp.text
                     logger.debug(
                         "[YUMAN ⇠] %s %s status=%s\nresp=%s",
                         method, endpoint, resp.status_code, dbg_resp

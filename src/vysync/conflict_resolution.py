@@ -35,84 +35,89 @@ SYNC_LOGS_TABLE = "sync_logs"
 FIELD_VALUES_TABLE = "equipment_field_values"
 
 # ──────────────────────────────  PUBLIC API  ────────────────────────────
-def import_yuman_sites_in_mapping(sb_adapter: SupabaseAdapter,
-                                  y_adapter) -> None:
+def import_yuman_sites_in_mapping(sb_adapter, y_adapter, y_sites: Dict[str, Site]) -> None:
     """
-    Insère/complète dans `sites_mapping` les sites Yuman dépourvus de clé VCOM
-    et crée une ligne `conflicts` (issue : missing_vcom_system_key).
-    """
-    sb = sb_adapter.sb
-    yc: YumanClient = y_adapter.yc
+    Alimente / met à jour la table `sites_mapping` avec le *snapshot* Yuman
+    déjà disponible (`y_sites`), sans effectuer de `yc.list_sites()`.
 
+    • On insère les sites inconnus.  
+    • On complète les champs manquants sur les lignes existantes.  
+    • On crée l’entrée “conflit” si un site Yuman n’a pas de
+      `vcom_system_key` ET n’est pas ignoré.
+    """
+    sb = sb_adapter.sb                           # client PostgREST
     existing = sb.table(SITE_TABLE).select("*").execute().data or []
-    by_yid = {r["yuman_site_id"]: r for r in existing if r.get("yuman_site_id")}
-    by_vkey = {r["vcom_system_key"]: r for r in existing if r.get("vcom_system_key")}
 
-    # map client→mapping id pour stocker le client sur les nouveaux sites
-    clients = sb.table("clients_mapping").select("id,yuman_client_id") \
-                                         .execute().data or []
-    client_map = {c["yuman_client_id"]: c["id"] for c in clients}
+    by_yid   = {r["yuman_site_id"]: r for r in existing if r.get("yuman_site_id")}
+    by_vkey  = {r["vcom_system_key"]: r for r in existing if r.get("vcom_system_key")}
 
-    upsert_rows, conflict_rows = [], []
-    for det in yc.list_sites(embed="fields,client"):
-        cvals = {f["name"]: f.get("value") for f in det.get("_embed", {}).get("fields", [])}
-        vkey = (cvals.get("System Key (Vcom ID)") or "").strip() or None
-        row = {
-            "name": det.get("name"),
-            "address": det.get("address"),
-            "code": det.get("code"),
-            "latitude": det.get("latitude"),
-            "longitude": det.get("longitude"),
-            "client_map_id": client_map.get(det.get("client_id")),
-            "yuman_site_id": det["id"],
+    # map client_id Yuman → client_map_id (pour stocker l’info si déjà connue)
+    cli_rows     = sb.table("clients_mapping").select("id,yuman_client_id").execute().data or []
+    client_map   = {c["yuman_client_id"]: c["id"] for c in cli_rows}
+
+    upserts:   list[dict] = []
+    conflicts: list[dict] = []
+
+    for s in y_sites.values():
+        vkey = s.vcom_system_key
+        row: dict = {
+            "yuman_site_id":  s.yuman_site_id,
             "vcom_system_key": vkey,
-            "aldi_id": (cvals.get("ALDI ID") or "").strip() or None,
-            "aldi_store_id": (cvals.get("ID magasin (n° interne Aldi)") or "").strip() or None,
-            "project_number_cp": (cvals.get("Project number (Centroplan ID)") or "").strip() or None,
-            "created_at": det.get("created_at") or _now(),
+            "name":           s.name,
+            "address":        s.address,
+            "latitude":       s.latitude,
+            "longitude":      s.longitude,
+            # attributs éventuellement ajoutés plus tard dans Site :
+            "code":           getattr(s, "code",     None),
+            "client_map_id":  client_map.get(getattr(s, "yuman_client_id", None)),
+            "aldi_id":         s.aldi_id,
+            "aldi_store_id":   s.aldi_store_id,
+            "project_number_cp": s.project_number_cp,
+            "created_at":     _now(),
         }
+
+        # --- Cas 1 : on a déjà la clé VCOM ---------------------------------
         if vkey:
-            # Si déjà présent côté VCOM : mise à jour éventuelle
-            if vkey in by_vkey:
+            if vkey in by_vkey:                 # MAJ éventuelle (compléter trous)
                 patch = {k: v for k, v in row.items()
-                         if v and not by_vkey[vkey].get(k)}
+                         if v is not None and not by_vkey[vkey].get(k)}
                 if patch:
                     sb.table(SITE_TABLE).update(patch) \
-                                        .eq("vcom_system_key", vkey).execute()
-            else:
-                upsert_rows.append(row)
-        
-        else:      # ----------- pas de clé VCOM  → potentiel conflit ----------
-            existing_row = by_yid.get(det["id"])
-            ignore_flag  = existing_row and existing_row.get("ignore_site")
+                      .eq("vcom_system_key", vkey).execute()
+            else:                               # nouvel insert
+                upserts.append(row)
+            continue
 
-            if existing_row:
-                # Mise à jour éventuelle des champs manquants
-                patch = {k: v for k, v in row.items()
-                         if v and not existing_row.get(k)}
-                if patch:
-                    sb.table(SITE_TABLE).update(patch) \
-                                        .eq("yuman_site_id", det["id"]).execute()
-            else:
-                # nouvelle ligne mapping (par défaut ignore_site = False)
-                row["ignore_site"] = False
-                upsert_rows.append(row)
+        # --- Cas 2 : pas de vcom_system_key  → potentiel conflit ----------
+        existing_row = by_yid.get(s.yuman_site_id)
+        ignore_flag  = existing_row and existing_row.get("ignore_site")
 
-            # Créer un conflit **uniquement si le site n’est PAS ignoré**
-            if not ignore_flag:
-                conflict_rows.append({
-                    "entity": "site",
-                    "yuman_site_id": det["id"],
-                    "issue": "missing_vcom_system_key",
-                    "created_at": _now(),
-                })
+        if existing_row:                        # compléter les trous
+            patch = {k: v for k, v in row.items()
+                     if v is not None and not existing_row.get(k)}
+            if patch:
+                sb.table(SITE_TABLE).update(patch) \
+                  .eq("yuman_site_id", s.yuman_site_id).execute()
+        else:                                   # nouvel insert
+            row["ignore_site"] = False
+            upserts.append(row)
 
-    if upsert_rows:
-        sb.table(SITE_TABLE).upsert(upsert_rows,
+        # créer une ligne de conflit si on n’ignore pas ce site
+        if not ignore_flag:
+            conflicts.append({
+                "entity":        "site",
+                "yuman_site_id": s.yuman_site_id,
+                "issue":         "missing_vcom_system_key",
+                "created_at":    _now(),
+            })
+
+    # --- bulk writes -------------------------------------------------------
+    if upserts:
+        sb.table(SITE_TABLE).upsert(upserts,
                                     on_conflict="yuman_site_id").execute()
-    if conflict_rows:
-        sb.table(CONFLICT_TABLE).upsert(conflict_rows,
-                                        on_conflict="yuman_site_id,issue").execute()
+    if conflicts:
+        sb.table(CONFLICT_TABLE).upsert(conflicts,
+            on_conflict="yuman_site_id,issue").execute()
 
 
 def detect_and_resolve_site_conflicts(sb_adapter: SupabaseAdapter,
@@ -227,7 +232,7 @@ def _ignore_site(sb, row: Dict) -> None:
                         .eq("id", row["id"]).execute()
     sb.table(CONFLICT_TABLE).update({"resolved": True, "resolved_at": _now()}) \
         .eq("entity", "site") \
-        .eq("yuman_site_id", row.get("yuman_site_id")).execute()
+        .execute()
     sb.table(SYNC_LOGS_TABLE).insert({
         "source": "user",
         "action": "ignore_site",
@@ -347,5 +352,53 @@ def _cleanup_equipment_after_merge(sb, site_id: int) -> None:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+# ───────────────────────── CLIENTS ────────────────────────────
+def resolve_clients_for_sites(sb_adapter: SupabaseAdapter,
+                              y_adapter) -> None:
+    sb = sb_adapter.sb
+    yc = y_adapter.yc
+    sites = sb.table("sites_mapping").select("id,name,client_map_id") \
+                .is_("client_map_id", None).eq("ignore_site", False).execute().data
+    if not sites:
+        logger.info("[CLIENT] aucun site orphelin")
+        return
+
+    # Pré-chargement région → client
+    reg_map = {r["name_addition"]: r["id"]
+               for r in sb.table("clients_mapping")
+                           .select("id,name_addition").execute().data
+               if r.get("name_addition")}
+
+    for s in sites:
+        region = re.search(r"\(([^)]+)\)", s["name"] or "")
+        region = region.group(1).strip() if region else None
+        client_id = reg_map.get(region) if region else None
+        if not client_id:
+            print(f"\nSite « {s['name']} » sans client.")
+            choice = input("ID client existant ou 0 pour créer : ").strip()
+            if choice == "0":
+                nom = input("Nom client : ")
+                adr = input("Adresse : ")
+                new_cli = yc.create_client({"name": nom, "address": adr})
+                sb.table("clients_mapping").insert({
+                    "yuman_client_id": new_cli["id"],
+                    "name":  new_cli["name"],
+                    "created_at": _now(),
+                }).execute()
+                client_id = sb.table("clients_mapping") \
+                              .select("id").eq("yuman_client_id", new_cli["id"]) \
+                              .single().execute().data["id"]
+            else:
+                client_id = int(choice)
+        # mise à jour site
+        sb.table("sites_mapping").update({"client_map_id": client_id}) \
+                                 .eq("id", s["id"]).execute()
+        sb.table("sync_logs").insert({
+            "source": "user",
+            "action": "client_resolved",
+            "payload": {"site_id": s["id"], "client_map_id": client_id},
+            "created_at": _now(),
+        }).execute()
 
 # ────────────────────────────────────────────────────────────────────────
