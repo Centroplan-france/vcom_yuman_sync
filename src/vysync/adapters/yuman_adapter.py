@@ -230,7 +230,7 @@ class YumanAdapter:
       Retourne un dictionnaire de *tous* les sites Yuman.
   
       ➜  Clé du dictionnaire
-          f"yuman:{site_id}" 
+          site_id
       """
       sites: Dict[str, Site] = {}
   
@@ -243,6 +243,7 @@ class YumanAdapter:
           }
   
           vcom_key = (cvals.get("System Key (Vcom ID)") or "").strip() or None
+          yuman_site_id   = s["id"]
   
           # Champs optionnels
           aldi_id           = (cvals.get("ALDI ID")                    or "").strip() or None
@@ -276,7 +277,7 @@ class YumanAdapter:
           )
   
           # --- Choix de la clé du dict
-          key = s["id"],
+          key = yuman_site_id
           sites[key] = site_obj
   
       logger.debug("[YUMAN] snapshot: %d sites",
