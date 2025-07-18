@@ -230,10 +230,7 @@ class YumanAdapter:
       Retourne un dictionnaire de *tous* les sites Yuman.
   
       ➜  Clé du dictionnaire
-          - Si le champ « System Key (Vcom ID) » est présent : on garde vcom_system_key (clé historique).
-          - Sinon : on utilise la chaîne spéciale f"yuman:{site_id}" pour éviter les collisions.
-            Ainsi, les sites sans clé VCOM sont quand‑même dans le snapshot, mais isolés
-            des clés VCOM existantes.
+          f"yuman:{site_id}" 
       """
       sites: Dict[str, Site] = {}
   
@@ -279,17 +276,7 @@ class YumanAdapter:
           )
   
           # --- Choix de la clé du dict
-          key = vcom_key if vcom_key else f"yuman:{s['id']}"
-  
-          # Collisions improbables : si deux sites partagent le même VCOM key,
-          # on garde le premier et log un warning.
-          if key in sites:
-              logger.warning(
-                  "[YUMAN] Duplicate key %s (site IDs %s, %s)",
-                  key, sites[key].yuman_site_id, s["id"]
-              )
-              continue
-  
+          key = yuman_site_id
           sites[key] = site_obj
   
       logger.debug("[YUMAN] snapshot: %d sites (dont %d sans SystemKey)",
@@ -382,7 +369,9 @@ class YumanAdapter:
             object.__setattr__(equip, "module_brand", module_brand)
             object.__setattr__(equip, "module_model", module_model)
 
-            equips[equip.key()] = equip
+            
+            key =   yuman_material_id
+            equips[key] = equip
 
         logger.debug("[YUMAN] snapshot: %s equips", len(equips))
         _dump("[YUMAN] snapshot equips", equips)
