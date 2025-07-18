@@ -279,9 +279,9 @@ class YumanAdapter:
           key = s["id"],
           sites[key] = site_obj
   
-      logger.debug("[YUMAN] snapshot: %d sites (dont %d sans SystemKey)",
+      logger.debug("[YUMAN] snapshot: %d sites",
                    len(sites),
-                   sum(1 for k in sites if k.startswith("yuman:")))
+                   )
       _dump("[YUMAN] snapshot sites", sites)
       return sites
 

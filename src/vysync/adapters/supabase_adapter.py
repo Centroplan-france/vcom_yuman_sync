@@ -91,7 +91,7 @@ class SupabaseAdapter:
         for r in rows:
             if not r.get("yuman_site_id"):
                 continue
-            sites[r["vcom_system_key"]] = Site(
+            sites[r["yuman_site_id"]] = Site(
                 vcom_system_key=r["vcom_system_key"],
                 name=r.get("name") or r["vcom_system_key"],
                 latitude=r.get("latitude"),
