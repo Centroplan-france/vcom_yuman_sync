@@ -157,6 +157,7 @@ def main() -> None:
     sb_sites  = sb.fetch_sites()
     sb_equips = sb.fetch_equipments()
     # ➔ (filtrage ignore_site / site_key idem)
+    sb_sites = {k: s for k, s in sb_sites.items() if not getattr(s, "ignore_site", False)}
 
     # -----------------------------------------------------------
     # PHASE 2 – Supabase ➜ Yuman  (diff + patch SANS refetch)
