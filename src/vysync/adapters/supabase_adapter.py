@@ -162,6 +162,24 @@ class SupabaseAdapter:
         ids_in_db = {r["yuman_material_id"] for r in existing_rows if r.get("yuman_material_id")}
         keys_in_db = {(r["vcom_device_id"], r["vcom_system_key"]) for r in existing_rows}
         
+        VALID_COLS: set[str] = {
+                                    "parent_id",
+                                    "is_obsolete",
+                                    "obsolete_at",
+                                    "count",
+                                    "vcom_system_key",
+                                    "eq_type",
+                                    "vcom_device_id",
+                                    "serial_number",
+                                    "brand",
+                                    "model",
+                                    "name",
+                                    "site_id",
+                                    "created_at",
+                                    "extra",
+                                    "yuman_material_id",
+                                    "category_id",
+                                }
         inserts = []
         updates = []
         for e in patch.add:

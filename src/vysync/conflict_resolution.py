@@ -263,14 +263,14 @@ def _merge_sites(sb, yc: YumanClient,
     # 6) Marquer le conflit résolu
     sb.table(CONFLICT_TABLE).update({"resolved": True, "resolved_at": _now()}) \
         .eq("entity", "site") \
-        .eq("yuman_site_id", pending_yuman_id).execute()
+        .eq("yuman_site_id", y_row["yuman_site_id"]).execute()
 
     # 7) Log fusion
     sb.table(SYNC_LOGS_TABLE).insert({
         "source":  "user",
         "action":  "merge_site",
         "payload": {"from": y_row["id"], "into": v_row["id"],
-                    "yuman_site_id": pending_yuman_id},
+                    "yuman_site_id": y_row["yuman_site_id"]},
         "created_at": _now(),
     }).execute()
 
