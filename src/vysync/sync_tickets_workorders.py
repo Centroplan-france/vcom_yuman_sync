@@ -3,7 +3,7 @@
 sync_tickets_workorders.py – Synchronise les tickets VCOM et les workorders Yuman.
 
 Usage:
-  python sync_tickets_workorders.py [--dry-run]
+  poetry run python -m vysync.sync_tickets_workorders [--dry-run]
 
 Ce script exécute le flux suivant :
   1. Récupère les tickets VCOM (open/assigned/inProgress) puis les upsert dans Supabase.
