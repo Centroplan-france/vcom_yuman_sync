@@ -153,7 +153,12 @@ def main() -> None:
     detect_and_resolve_site_conflicts(sb, y)
     resolve_clients_for_sites(sb, y)
 
-    # --- re‑charge Supabase après résolution
+    # --- re‑charge Supabase et yuman après résolution
+    
+    y_clients = list(y.yc.list_clients())
+    y_sites   = y.fetch_sites()
+    y_equips  = y.fetch_equips()
+    
     sb_sites  = sb.fetch_sites()
     sb_equips = sb.fetch_equipments()
     # ➔ (filtrage ignore_site / site_key idem)
