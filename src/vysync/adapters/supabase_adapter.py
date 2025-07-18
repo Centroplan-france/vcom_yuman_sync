@@ -152,64 +152,62 @@ class SupabaseAdapter:
 
     # ------------------------ APPLY EQUIPS -----------------------------
     def apply_equips_patch(self, patch) -> None:
-        """
-        • `patch.add`  : Iterable[Equipment]  
-        • `patch.update`: Iterable[tuple[Equipment, Equipment]]
-        """
-        VALID_COLS: set[str] = {
-            "yuman_material_id", "category_id", "eq_type",
-            "vcom_system_key",   "vcom_device_id", "serial_number",
-            "brand", "model", "name", "site_id", "created_at",
-            "count", "parent_id", "is_obsolete", "obsolete_at",
-        }
-
-        # ---------- ADD ----------
+        # Récupérer tous les équipements existants pour détecter les doublons
+        existing_rows = (
+            self.sb.table(EQUIP_TABLE)
+            .select("vcom_device_id,vcom_system_key,yuman_material_id")
+            .execute()
+            .data or []
+        )
+        ids_in_db = {r["yuman_material_id"] for r in existing_rows if r.get("yuman_material_id")}
+        keys_in_db = {(r["vcom_device_id"], r["vcom_system_key"]) for r in existing_rows}
+        
+        inserts = []
+        updates = []
         for e in patch.add:
             site_id = self._site_id(e.vcom_system_key)
             if site_id is None:
-                logger.error("[SB] site %s introuvable → skip %s",
-                             e.vcom_system_key, e.vcom_device_id)
+                logger.error("[SB] site %s introuvable → skip %s", e.vcom_system_key, e.vcom_device_id)
                 continue
-
             row = e.to_dict()
             row.update(
-                site_id      = site_id,
-                created_at   = datetime.now(timezone.utc).isoformat(),
-                name         = row["name"] or row["vcom_device_id"],
+                site_id    = site_id,
+                created_at = datetime.now(timezone.utc).isoformat(),
+                name       = row.get("name") or row["vcom_device_id"]
             )
+            # Filtrer les colonnes valides
             row = {k: v for k, v in row.items() if k in VALID_COLS}
-
-            logger.debug("[SB] INSERT equip %s", row["vcom_device_id"])
-            _dump("[SB] row inserted", row)
+            # Décider insert vs update en fonction des doublons
+            if (row.get("yuman_material_id") in ids_in_db) or ((row["vcom_device_id"], row["vcom_system_key"]) in keys_in_db):
+                updates.append(row)
+            else:
+                inserts.append(row)
+        
+        # Insérer les nouveaux équipements (upsert sur vcom_device_id + yuman_material_id)
+        if inserts:
             try:
-                self.sb.table(EQUIP_TABLE).upsert([row], on_conflict="vcom_device_id",).execute()
+                self.sb.table(EQUIP_TABLE).upsert(
+                    inserts,
+                    on_conflict=["yuman_material_id", "vcom_device_id"],
+                    ignore_duplicates=True
+                ).execute()
             except Exception as exc:
                 logger.exception("[SB] INSERT failed: %s", exc)
-
-        # ---------- UPDATE ----------
-        IMMUTABLE_COLS = {"vcom_device_id", "vcom_system_key", "site_id", "created_at"}
-
-        for _, new in patch.update:
-            upd = {
-                k: v
-                for k, v in new.to_dict().items()
-                if v is not None and k not in IMMUTABLE_COLS
-            }
-
-            if upd.get("yuman_material_id") is None:
-                upd.pop("yuman_material_id", None)
-
-            if not upd:
-                continue  # rien à mettre à jour
-
+        
+        # Mettre à jour les équipements existants
+        for row in updates:
             try:
-                self.sb.table(EQUIP_TABLE) \
-                    .update(upd) \
-                    .eq("vcom_device_id", new.vcom_device_id) \
-                    .execute()
+                if row.get("yuman_material_id"):
+                    # Mise à jour par yuman_material_id si disponible
+                    self.sb.table(EQUIP_TABLE).update(row) \
+                          .eq("yuman_material_id", row["yuman_material_id"]).execute()
+                else:
+                    # Sinon, mise à jour par vcom_device_id
+                    self.sb.table(EQUIP_TABLE).update(row) \
+                          .eq("vcom_device_id", row["vcom_device_id"]).execute()
+                logger.debug("[SB] UPDATE equip %s", row["vcom_device_id"])
             except Exception as exc:
-                logger.exception("[SB] UPSERT failed: %s", exc)
-
+                logger.exception("[SB] UPDATE failed: %s", exc)
 
         # ---------- DELETE ----------
         for e in patch.delete:
