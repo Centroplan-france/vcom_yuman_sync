@@ -276,7 +276,7 @@ class YumanAdapter:
           )
   
           # --- Choix de la clé du dict
-          key = yuman_site_id
+          key = s["id"],
           sites[key] = site_obj
   
       logger.debug("[YUMAN] snapshot: %d sites (dont %d sans SystemKey)",
@@ -370,7 +370,7 @@ class YumanAdapter:
             object.__setattr__(equip, "module_model", module_model)
 
             
-            key =   yuman_material_id
+            key =   m["id"]
             equips[key] = equip
 
         logger.debug("[YUMAN] snapshot: %s equips", len(equips))
