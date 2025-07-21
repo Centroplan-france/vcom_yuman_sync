@@ -291,13 +291,6 @@ class YumanClient:  # pylint: disable=too-many-public-methods
     # ------------------------------------------------------------------ #
     # Utilitaires                                                        #
     # ------------------------------------------------------------------ #
-    def healthcheck(self) -> bool:
-        try:
-            self._request("GET", "clients", params={"page": 1, "perPage": 1})
-            return True
-        except YumanClientError as exc:
-            logger.warning("Yuman healthcheck failed: %s", exc)
-            return False
 
     def get_category_id(self) -> Optional[int]:
         return self._get("materials/categories")
