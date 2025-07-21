@@ -62,11 +62,43 @@ def _equals(a: T, b: T) -> bool:
             return da == db
         
         if isinstance(a, Equipment) and isinstance(b, Equipment):
-            da = asdict(a); db = asdict(b)
-            da.pop("yuman_material_id", None); db.pop("yuman_material_id", None)
-            return da == db
-        return asdict(a) == asdict(b)
+            return _equip_equals(a, b)
     return a == b
+
+def _equip_equals(a: Equipment, b: Equipment) -> bool:
+    # Normalisation commune
+    for d in (a, b):
+        if d.brand is None:  d.brand  = ""
+        if d.model is None:  d.model  = ""
+        if d.serial_number is None: d.serial_number = ""
+        if d.count in (None, ""): d.count = 0
+
+    # Dispatcher par category_id
+    if a.category_id == CAT_MODULE:
+        # On compare seulement (brand, model, serial_number, parent_id, count)
+        return (
+            a.brand.lower()  == b.brand.lower() and
+            a.model.lower()  == b.model.lower() and
+            a.serial_number == b.serial_number and
+            (a.parent_id or "") == (b.parent_id or "") and
+            int(a.count) == int(b.count)
+        )
+    elif a.category_id == CAT_STRING:
+        # Ici on veut que parent_id et fields MPPT soient identiques
+        return (
+            (a.parent_id or "") == (b.parent_id or "") and
+            a.serial_number == b.serial_number
+        )
+    elif a.category_id == CAT_INVERTER:
+        return (
+            a.serial_number == b.serial_number and
+            a.model.lower() == b.model.lower()
+        )
+    else:
+        # Fall‑back : tout comparer sauf yuman_material_id
+        da, db = asdict(a), asdict(b)
+        da.pop("yuman_material_id", None); db.pop("yuman_material_id", None)
+        return da == db
 
 
 def diff_entities(
