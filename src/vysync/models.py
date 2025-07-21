@@ -12,20 +12,22 @@ from typing import Any, Dict, Optional
 # ────────────────────────── Sites ────────────────────────────
 @dataclass(frozen=True)
 class Site:
-    vcom_system_key: str
+    yuman_site_id: Optional[int] = None
+    vcom_system_key: Optional[str] = None
+    client_map_id: Optional[int] = None 
+    code: optional[int] = None                      # code yuman
     name: str
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     nominal_power: Optional[float] = None
+    site_area: optional[float] = None
     commission_date: Optional[str] = None  # ISO
     address: Optional[str] = None
-    yuman_site_id: Optional[int] = None
-    client_map_id: Optional[int] = None       # ← nouveau
-    ignore_site:   bool = False    
     aldi_id: Optional[str] = None                   # "ALDI ID"
     aldi_store_id: Optional[str] = None             # "ID magasin (n° interne Aldi)"
-    project_number_cp: Optional[str] = None         # "Project number (Centroplan ID)"           # ← pratique pour les filtres
-
+    project_number_cp: Optional[str] = None         # "Project number (Centroplan ID)"      
+    ignore_site:   bool = False  
+        
     def key(self) -> str:
         return self.vcom_system_key
 
@@ -35,17 +37,19 @@ class Site:
 # ──────────────────────── Equipements ────────────────────────
 @dataclass(frozen=True, eq=False)               # ① on désactive l’__eq__ auto
 class Equipment:
-    vcom_system_key: str
+    vcom_system_key: Optional[str] = None
+    yuman_material_id: Optional[int] = None
     category_id: int
     eq_type: str
-    vcom_device_id: str
+    vcom_device_id: Optional[str] = None
     name: str
     brand: Optional[str] = None
     model: Optional[str] = None
     serial_number: Optional[str] = None
     count: Optional[int] = None                # ex-string_count ?
     parent_id: Optional[str] = None
-    yuman_material_id: Optional[int] = None
+    
+
 
     # --- clé « métier » -----------------------------------
     def key(self) -> str:
@@ -84,3 +88,4 @@ CAT_INVERTER = 11102
 CAT_MODULE   = 11103
 CAT_STRING   = 12404
 CAT_CENTRALE = 11441
+CAT_SIM      = 11382
