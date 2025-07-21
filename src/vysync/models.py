@@ -12,15 +12,15 @@ from typing import Any, Dict, Optional
 # ────────────────────────── Sites ────────────────────────────
 @dataclass(frozen=True)
 class Site:
+    name: str
     yuman_site_id: Optional[int] = None
     vcom_system_key: Optional[str] = None
     client_map_id: Optional[int] = None 
-    code: optional[int] = None                      # code yuman
-    name: str
+    code: Optional[int] = None                      # code yuman
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     nominal_power: Optional[float] = None
-    site_area: optional[float] = None
+    site_area: Optional[float] = None
     commission_date: Optional[str] = None  # ISO
     address: Optional[str] = None
     aldi_id: Optional[str] = None                   # "ALDI ID"
@@ -37,12 +37,12 @@ class Site:
 # ──────────────────────── Equipements ────────────────────────
 @dataclass(frozen=True, eq=False)               # ① on désactive l’__eq__ auto
 class Equipment:
-    vcom_system_key: Optional[str] = None
-    yuman_material_id: Optional[int] = None
     category_id: int
     eq_type: str
-    vcom_device_id: Optional[str] = None
     name: str
+    vcom_system_key: Optional[str] = None
+    yuman_material_id: Optional[int] = None
+    vcom_device_id: Optional[str] = None
     brand: Optional[str] = None
     model: Optional[str] = None
     serial_number: Optional[str] = None
@@ -73,8 +73,8 @@ class Equipment:
 @dataclass(frozen=True)
 class Client:
     yuman_client_id: int
-    code: Optional[str]
     name: str
+    code: Optional[str]
     address: Optional[str]
 
     def key(self) -> int:

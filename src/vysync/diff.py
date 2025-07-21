@@ -10,7 +10,7 @@ Le résultat est un PatchSet (add, update, delete) sérialisable.
 
 from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, Generic, List, Tuple, TypeVar, NamedTuple
-from vysync.models import Site, Equipment
+from vysync.models import Site, Equipment, CAT_MODULE, CAT_STRING, CAT_INVERTER
 from dateutil.parser import isoparse
 from datetime import datetime
 
@@ -66,38 +66,54 @@ def _equals(a: T, b: T) -> bool:
     return a == b
 
 def _equip_equals(a: Equipment, b: Equipment) -> bool:
-    # Normalisation commune
-    for d in (a, b):
-        if d.brand is None:  d.brand  = ""
-        if d.model is None:  d.model  = ""
-        if d.serial_number is None: d.serial_number = ""
-        if d.count in (None, ""): d.count = 0
+    # Sérialisation en dict (non mutatif pour l'instance)
+    da = a.to_dict()
+    db = b.to_dict()
 
-    # Dispatcher par category_id
-    if a.category_id == CAT_MODULE:
-        # On compare seulement (brand, model, serial_number, parent_id, count)
+    # Retirer l'ID Yuman : ce champ n'entre pas en compte pour l'égalité
+    da.pop("yuman_material_id", None)
+    db.pop("yuman_material_id", None)
+
+    # Normalisation commune : None ↔ "" pour les chaînes, None/"" ↔ 0 pour count
+    for d in (da, db):
+        # Champs chaîne
+        for key in ("brand", "model", "serial_number", "parent_id"):
+            if d.get(key) is None:
+                d[key] = ""
+            elif isinstance(d[key], str):
+                d[key] = d[key].strip()
+        # Champ numérique
+        if d.get("count") in (None, ""):
+            d["count"] = 0
+        else:
+            # forcer int
+            d["count"] = int(d["count"])
+
+    # Dispatcher métier selon category_id
+    cat = da.get("category_id")
+    if cat == CAT_MODULE:
+        # Modules : marque, modèle, serial, parent, count
         return (
-            a.brand.lower()  == b.brand.lower() and
-            a.model.lower()  == b.model.lower() and
-            a.serial_number == b.serial_number and
-            (a.parent_id or "") == (b.parent_id or "") and
-            int(a.count) == int(b.count)
+            da["brand"].lower()       == db["brand"].lower() and
+            da["model"].lower()       == db["model"].lower() and
+            da["serial_number"]       == db["serial_number"] and
+            da["parent_id"]           == db["parent_id"] and
+            da["count"]               == db["count"]
         )
-    elif a.category_id == CAT_STRING:
-        # Ici on veut que parent_id et fields MPPT soient identiques
+    elif cat == CAT_STRING:
+        # Strings : parent + serial
         return (
-            (a.parent_id or "") == (b.parent_id or "") and
-            a.serial_number == b.serial_number
+            da["parent_id"]           == db["parent_id"] and
+            da["serial_number"]       == db["serial_number"]
         )
-    elif a.category_id == CAT_INVERTER:
+    elif cat == CAT_INVERTER:
+        # Onduleurs : serial + modèle
         return (
-            a.serial_number == b.serial_number and
-            a.model.lower() == b.model.lower()
+            da["serial_number"]       == db["serial_number"] and
+            da["model"].lower()       == db["model"].lower()
         )
     else:
-        # Fall‑back : tout comparer sauf yuman_material_id
-        da, db = asdict(a), asdict(b)
-        da.pop("yuman_material_id", None); db.pop("yuman_material_id", None)
+        # Fallback : tout comparer sauf yuman_material_id
         return da == db
 
 
