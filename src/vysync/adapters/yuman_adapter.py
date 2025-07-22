@@ -24,7 +24,8 @@ from vysync.models import (
     CAT_INVERTER,
     CAT_MODULE,
     CAT_STRING,
-    CAT_CENTRALE
+    CAT_CENTRALE, 
+    CAT_SIM
 )
 from vysync.yuman_client import YumanClient
 from vysync.adapters.supabase_adapter import SupabaseAdapter
@@ -164,88 +165,106 @@ class YumanAdapter:
     # ------------------------------------------------------------------ #
     def fetch_equips(self) -> Dict[str, Equipment]:
         """
-        Charge tous les matériels (modules, onduleurs, strings) déjà mappés.
-        Clef : vcom_device_id. On normalise ici tous les champs custom.
+        Récupère tous les matériels Yuman (modules, onduleurs, strings, SIM, etc.)
+        et les normalise en objets `Equipment`.
+
+        • Clé du dictionnaire retourné : `yuman_material_id` (m["id"])
+        • Chaque Equipment contient :
+            - `site_id`         : clé étrangère Supabase (résolue ici)
+            - `yuman_site_id`   : id du site côté Yuman
+            - `vcom_system_key` : si le site est déjà mappé à VCOM
         """
-        sites_by_id = {s.yuman_site_id: s for s in self.fetch_sites().values()}
+        # -------------------------------------------------------------
+        # 1) Index rapide : yuman_site_id  ➜  (site_id, vcom_system_key)
+        # -------------------------------------------------------------
+        sites_by_yid: dict[int, tuple[int, str | None]] = {
+            s.yuman_site_id: (s.id, s.vcom_system_key)
+            for s in self.fetch_sites().values()
+            if s.yuman_site_id is not None
+        }
+
         equips: Dict[str, Equipment] = {}
 
+        # -------------------------------------------------------------
+        # 2) Parcours de tous les matériels Yuman
+        # -------------------------------------------------------------
         for m in self.yc.list_materials(embed="fields,site"):
-            site = sites_by_id.get(m["site_id"])
-            if not site:
+            site_info = sites_by_yid.get(m["site_id"])
+            if site_info is None:          # site non importé / ignoré
                 continue
 
+            site_id, vcom_key = site_info
             cat_id = m["category_id"]
+
+            # --- champs personnalisés --------------------------------
             raw_fields = {
                 f["name"]: f.get("value")
                 for f in m.get("_embed", {}).get("fields", [])
             }
 
-            # — rebuild vcom_device_id —
+            # --- reconstruction du vcom_device_id --------------------
             if cat_id == CAT_INVERTER:
                 vdid = raw_fields.get(CUSTOM_INVERTER_ID) or m.get("serial_number", "")
             elif cat_id == CAT_STRING:
                 vdid = m.get("serial_number") or m["name"]
             elif cat_id == CAT_MODULE:
-                vdid = f"MODULES-{site.vcom_system_key}"
+                vdid = f"MODULES-{vcom_key or 'UNKNOWN'}"
             else:
                 vdid = m.get("serial_number") or m["name"]
 
-            # — type pour le dataclass
+            # --- typage ----------------------------------------------
             eq_type = (
-                "inverter" if cat_id == CAT_INVERTER else
-                "module"   if cat_id == CAT_MODULE else
-                "string_pv"
+                "inverter"  if cat_id == CAT_INVERTER  else
+                "module"    if cat_id == CAT_MODULE    else
+                "string_pv" if cat_id == CAT_STRING    else
+                "sim"       if cat_id == CAT_SIM       else
+                "plant"     if cat_id == CAT_CENTRALE  else
+                "other"
             )
 
-            # — normalisation du count (nombre de module) —
+            # --- count (nombre de modules) ---------------------------
             raw_nb = raw_fields.get("nombre de module")
-            if raw_nb is None or raw_nb == "":
+            try:
+                count = int(raw_nb) if raw_nb not in (None, "") else None
+            except ValueError:
                 count = None
-            else:
-                # forcer int
-                try:
-                    count = int(raw_nb)
-                except ValueError:
-                    count = None
 
-            # — normalisation MPPT index —
-            raw_mppt = raw_fields.get("MPPT index")
-            mppt_idx = str(raw_mppt).strip() if raw_mppt is not None else ""
-
-            # — normalisation des autres custom fields —
+            # --- autres normalisations -------------------------------
+            mppt_idx     = str(raw_fields.get("MPPT index", "")).strip()
             module_brand = (raw_fields.get("marque du module") or "").strip()
             module_model = (raw_fields.get("model de module")  or "").strip()
 
-            # — strip name/brand/model/serial_number pour éviter les espaces parasites
-            name  = (m.get("name") or "").strip()
-            brand = (m.get("brand") or "").strip()
-            model = (m.get("model") or "").strip()
+            name   = (m.get("name")          or "").strip()
+            brand  = (m.get("brand")         or "").strip()
+            model  = (m.get("model")         or "").strip()
             serial = (m.get("serial_number") or "").strip()
 
+            # ---------------------------------------------------------
+            # 3) Construction de l'objet Equipment
+            # ---------------------------------------------------------
             equip = Equipment(
-                vcom_system_key = site.vcom_system_key,
-                category_id     = cat_id,
-                eq_type         = eq_type,
-                vcom_device_id  = vdid.strip(),
-                name            = name,
-                brand           = brand,
-                model           = model,
-                serial_number   = serial,
-                count           = count,
+                site_id          = site_id,          # clé étrangère Supabase
+                yuman_site_id    = m["site_id"],     # id Yuman du site
+                vcom_system_key  = vcom_key,         # peut être None
+                category_id      = cat_id,
+                eq_type          = eq_type,
+                vcom_device_id   = vdid.strip(),
+                name             = name,
+                brand            = brand,
+                model            = model,
+                serial_number    = serial,
+                count            = count,
                 yuman_material_id = m["id"],
-                parent_id       = m.get("parent_id"),
+                parent_id        = m.get("parent_id"),
             )
 
-            # — on stocke les custom attribs pour le diff plus tard —
+            # champs custom pour diff ultérieur
             object.__setattr__(equip, "mppt_idx",     mppt_idx)
             object.__setattr__(equip, "nb_modules",   str(count or ""))
             object.__setattr__(equip, "module_brand", module_brand)
             object.__setattr__(equip, "module_model", module_model)
 
-            
-            key =   m["id"]
-            equips[key] = equip
+            equips[m["id"]] = equip  # clé = yuman_material_id
 
         logger.debug("[YUMAN] snapshot: %s equips", len(equips))
         _dump("[YUMAN] snapshot equips", equips)
@@ -276,9 +295,12 @@ class YumanAdapter:
         # 2) ADD
         for s in patch.add:
             payload = {
-                "name":     re.sub(r'^\d+\s+|\s*\(.*?\)| France', '', s.name),
-                "address":  s.address or "",
+                "name":      re.sub(r'^\d+\s+|\s*\(.*?\)| France', '', s.name),
+                "address":   s.address or "",
                 "client_id": self._yuman_client_for_site(s),
+                # coordonnées si dispo
+                **({"latitude": s.latitude}   if s.latitude  is not None else {}),
+                **({"longitude": s.longitude} if s.longitude is not None else {}),
                 "fields": [
                     {
                         "blueprint_id": SITE_FIELDS["System Key (Vcom ID)"],
@@ -299,6 +321,7 @@ class YumanAdapter:
             }
             logger.debug("[YUMAN] create_site payload=%s", payload)
             new_site = self.yc.create_site(payload)
+
             # propager l’ID en DB
             self.sb.sb.table("sites_mapping") \
                 .update({"yuman_site_id": new_site["id"]}) \
@@ -311,21 +334,41 @@ class YumanAdapter:
             site_patch: dict[str, Any] = {}
             fields_patch: list[dict[str, Any]] = []
 
-            # nom & address
+            # Nom & adresse
             clean_new_name = re.sub(r'^\d+\s+|\s*\(.*?\)| France', '', new.name)
             if old.name != clean_new_name and clean_new_name:
                 site_patch["name"] = clean_new_name
             if (old.address or "") != (new.address or ""):
                 site_patch["address"] = new.address or ""
 
-            # nominal_power
+            # Latitude / longitude
+            if old.latitude != new.latitude and new.latitude is not None:
+                site_patch["latitude"] = new.latitude
+            if old.longitude != new.longitude and new.longitude is not None:
+                site_patch["longitude"] = new.longitude
+
+            # Client ID
+            new_client_id = self._yuman_client_for_site(new)
+            if old.client_map_id != new.client_map_id and new_client_id is not None:
+                site_patch["client_id"] = new_client_id
+
+            # System Key
+            if old.vcom_system_key != new.vcom_system_key and new.vcom_system_key:
+                fields_patch.append({
+                    "blueprint_id": SITE_FIELDS["System Key (Vcom ID)"],
+                    "name": "System Key (Vcom ID)",
+                    "value": new.vcom_system_key,
+                })
+
+            # Nominal Power
             if old.nominal_power != new.nominal_power and new.nominal_power is not None:
                 fields_patch.append({
                     "blueprint_id": SITE_FIELDS["Nominal Power (kWc)"],
                     "name": "Nominal Power (kWc)",
                     "value": new.nominal_power,
                 })
-            # commission_date
+
+            # Commission Date
             if old.commission_date != new.commission_date and new.commission_date:
                 fields_patch.append({
                     "blueprint_id": SITE_FIELDS["Commission Date"],
@@ -339,13 +382,14 @@ class YumanAdapter:
             if site_patch:
                 logger.debug("[YUMAN] update_site %s payload=%s", old.yuman_site_id, site_patch)
                 self.yc.update_site(old.yuman_site_id, site_patch)
+
             # back‑fill Yuman ID si besoin
             if new.yuman_site_id is None and old.yuman_site_id:
                 self.sb.sb.table("sites_mapping") \
                     .update({"yuman_site_id": old.yuman_site_id}) \
                     .eq("vcom_system_key", new.vcom_system_key) \
                     .execute()
-                
+
     # ------------------------------------------------------------------
     #  Équipement “Centrale”                                             #
     # ------------------------------------------------------------------

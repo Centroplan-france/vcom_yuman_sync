@@ -62,16 +62,12 @@ def main() -> None:
     # -----------------------------------------------------------
     # PHASE 1 A – VCOM → Supabase
     # -----------------------------------------------------------
-    db_sites   = sb.fetch_sites_v()
-    db_equips  = sb.fetch_equipments_v()
+    db_sites   = sb.fetch_sites_v(site_key=site_key)
+    db_equips  = sb.fetch_equipments_v(site_key=site_key)
     known_sys  = set(db_sites.keys())
 
     # snapshot VCOM
-    v_sites, v_equips = fetch_snapshot(
-        vc,
-        vcom_system_key=site_key,
-        skip_keys=None if maj_all or site_key else known_sys,
-    )
+    v_sites, v_equips = fetch_snapshot(vc, vcom_system_key=site_key, skip_keys=None if maj_all or site_key else known_sys,    )
     if site_key:
         v_sites  = {k: s for k, s in v_sites.items() if k == site_key}
         v_equips = {k: e for k, e in v_equips.items() if e.vcom_system_key == site_key}
@@ -83,8 +79,8 @@ def main() -> None:
         db_equips = {k: e for k, e in db_equips.items() if e.vcom_system_key in seen}
 
     # diff & patch
-    patch_sites  = diff_entities(db_sites,  v_sites)
-    patch_equips = diff_entities(db_equips, v_equips)
+    patch_sites = diff_entities(db_sites, v_sites, ignore_fields={"yuman_site_id", "client_map_id", "code", "ignore_site"})
+    patch_equips = diff_entities(db_equips, v_equips, ignore_fields={"yuman_material_id", "parent_id"})
 
     logger.info(
         "[VCOM→DB] Sites  Δ  +%d  ~%d  -%d",
@@ -105,7 +101,7 @@ def main() -> None:
     # -----------------------------------------------------------
     # PHASE 1 B – YUMAN → Supabase (mapping)
     # -----------------------------------------------------------
-    logger.info("[YUMAN→DB] snapshot & patch fill‑missing …")
+    # logger.info("[YUMAN→DB] snapshot & patch fill‑missing …")
 
     # 1) on prend UN SEUL snapshot Yuman
     y_clients = list(y.yc.list_clients())
@@ -119,8 +115,9 @@ def main() -> None:
 
     # 3) on génère des patchs « fill missing » (pas de supprimer)
     patch_clients = diff_fill_missing(db_clients,     {c["id"]: c for c in y_clients})
-    patch_maps_sites  = diff_fill_missing(db_maps_sites,  y_sites)
-    patch_maps_equips = diff_fill_missing(db_maps_equips, y_equips)
+    patch_maps_sites  = diff_fill_missing(db_maps_sites,  y_sites, fields=["yuman_site_id","code", "client_map_id", "name",  "aldi_id","aldi_store_id","project_number_cp","commission_date","nominal_power"])
+    patch_maps_equips = diff_fill_missing(db_maps_equips, y_equips, fields=["category_id","eq_type", "name", "yuman_material_id",
+                                                                              "serial_number","brand","model","count","parent_id"])
 
     logger.info(
         "[YUMAN→DB] Clients Δ +%d  ~%d  -%d",
@@ -144,7 +141,7 @@ def main() -> None:
     # 4) on ré‑utilise les mêmes apply_*_patch de SupabaseAdapter
     sb.apply_clients_mapping_patch(patch_clients)
     sb.apply_sites_patch(patch_maps_sites)
-    sb.apply_equips_patch(patch_maps_equips)
+    sb.apply_equips_mapping_patch(patch_maps_equips) 
 
     # -----------------------------------------------------------
     # PHASE 1 C – Résolution manuelle des conflits de sites
@@ -162,13 +159,17 @@ def main() -> None:
     sb_sites  = sb.fetch_sites_y()
     sb_equips = sb.fetch_equipments_y()
     # ➔ (filtrage ignore_site / site_key idem)
-    sb_sites = {k: s for k, s in sb_sites.items() if not getattr(s, "ignore_site", False)}
+    sb_sites = {
+                k: s
+                for k, s in sb_sites.items()
+                if not (getattr(s, "ignore_site", False) and getattr(s, "yuman_site_id", None) is None)
+            }
 
     # -----------------------------------------------------------
     # PHASE 2 – Supabase ➜ Yuman  (diff + patch SANS refetch)
     # -----------------------------------------------------------
     logger.info("[DB→YUMAN] Synchronisation des sites…")
-    patch_s = diff_entities(y_sites, sb_sites)
+    patch_s = diff_entities(y_sites, sb_sites, ignore_fields={"client_map_id", "id", "ignore_site"})
     logger.info(
         "[DB→YUMAN] Sites Δ  +%d  ~%d  -%d",
         len(patch_s.add),
@@ -182,7 +183,7 @@ def main() -> None:
     )
 
     logger.info("[DB→YUMAN] Synchronisation des équipements…")
-    patch_e = diff_entities(y_equips, sb_equips)
+    patch_e = diff_entities(y_equips, sb_equips, ignore_fields={"vcom_system_key", "yuman_site_id"})
     logger.info(
         "[DB→YUMAN] Equips Δ  +%d  ~%d  -%d",
         len(patch_e.add),

@@ -9,10 +9,15 @@ Le résultat est un PatchSet (add, update, delete) sérialisable.
 """
 
 from dataclasses import asdict, is_dataclass
-from typing import Any, Dict, Generic, List, Tuple, TypeVar, NamedTuple
-from vysync.models import Site, Equipment, CAT_MODULE, CAT_STRING, CAT_INVERTER
+from typing import Any, Dict, Generic, List, Tuple, TypeVar, NamedTuple, Optional, Set
+from vysync.models import Site, Equipment, CAT_MODULE, CAT_STRING, CAT_INVERTER, CAT_CENTRALE, CAT_SIM
 from dateutil.parser import isoparse
 from datetime import datetime
+import logging
+from vysync.app_logging import init_logger
+logger = init_logger(__name__)
+logger.setLevel(logging.DEBUG)
+
 
 T = TypeVar("T")
 
@@ -25,14 +30,15 @@ class PatchSet(NamedTuple, Generic[T]):
         return not (self.add or self.update or self.delete)
 
 
-def _equals(a: T, b: T) -> bool:
+def _equals(a: T, b: T, ignore_fields: Optional[set[str]] = None) -> bool:
     """Égalité ‘profonde’ compatible dataclass/non-dataclass."""
     if is_dataclass(a) and is_dataclass(b):
         if isinstance(a, Site) and isinstance(b, Site):
             da, db = asdict(a), asdict(b)
             for d in (da, db):
-                d.pop("yuman_site_id", None)
-                d.pop("ignore_site", None)
+                if ignore_fields:
+                    for field in ignore_fields:
+                        d.pop(field, None)
 
                 # normaliser commission_date  (ex. 29/04/2025 → 2025-04-29)
                 cd = d.get("commission_date")
@@ -62,80 +68,93 @@ def _equals(a: T, b: T) -> bool:
             return da == db
         
         if isinstance(a, Equipment) and isinstance(b, Equipment):
-            return _equip_equals(a, b)
+            return _equip_equals(a, b, ignore_fields=ignore_fields)
     return a == b
 
-def _equip_equals(a: Equipment, b: Equipment) -> bool:
-    # Sérialisation en dict (non mutatif pour l'instance)
+def _equip_equals(a: Equipment, b: Equipment, ignore_fields: Optional[Set[str]] = None) -> bool:
     da = a.to_dict()
     db = b.to_dict()
 
-    # Retirer l'ID Yuman : ce champ n'entre pas en compte pour l'égalité
-    da.pop("yuman_material_id", None)
-    db.pop("yuman_material_id", None)
+    # Retirer les champs à ignorer
+    if ignore_fields:
+        for field in ignore_fields:
+            da.pop(field, None)
+            db.pop(field, None)
 
-    # Normalisation commune : None ↔ "" pour les chaînes, None/"" ↔ 0 pour count
+    # Normalisation
     for d in (da, db):
-        # Champs chaîne
         for key in ("brand", "model", "serial_number", "parent_id"):
             if d.get(key) is None:
                 d[key] = ""
             elif isinstance(d[key], str):
                 d[key] = d[key].strip()
-        # Champ numérique
-        if d.get("count") in (None, ""):
-            d["count"] = 0
-        else:
-            # forcer int
-            d["count"] = int(d["count"])
+        d["count"] = int(d.get("count") or 0)
 
-    # Dispatcher métier selon category_id
     cat = da.get("category_id")
+
     if cat == CAT_MODULE:
-        # Modules : marque, modèle, serial, parent, count
         return (
             da["brand"].lower()       == db["brand"].lower() and
             da["model"].lower()       == db["model"].lower() and
-            da["serial_number"]       == db["serial_number"] and
-            da["parent_id"]           == db["parent_id"] and
             da["count"]               == db["count"]
         )
     elif cat == CAT_STRING:
-        # Strings : parent + serial
         return (
+            da["name"]                == db["name"] and
+            da["brand"].lower()       == db["brand"].lower() and
+            da["model"].lower()       == db["model"].lower() and
+            da["count"]               == db["count"] and
+            da["name"]                == db["name"] and
+            da["vcom_device_id"]      == db["vcom_device_id"] and
             da["parent_id"]           == db["parent_id"] and
             da["serial_number"]       == db["serial_number"]
         )
     elif cat == CAT_INVERTER:
-        # Onduleurs : serial + modèle
         return (
+            da["name"]                == db["name"] and
+            da["brand"].lower()       == db["brand"].lower() and
+            da["model"].lower()       == db["model"].lower() and
             da["serial_number"]       == db["serial_number"] and
-            da["model"].lower()       == db["model"].lower()
+            da["vcom_device_id"]      == db["vcom_device_id"] 
+        )
+    elif cat == CAT_CENTRALE:
+        return (
+            da["name"]                == db["name"]            
+        )
+    elif cat == CAT_SIM:
+        return (
+            da["name"]                == db["name"] and
+            da["brand"].lower()       == db["brand"].lower() and
+            da["model"].lower()       == db["model"].lower() and
+            da["serial_number"]       == db["serial_number"] and
+            da["vcom_device_id"]      == db["vcom_device_id"] 
         )
     else:
-        # Fallback : tout comparer sauf yuman_material_id
         return da == db
+
 
 
 def diff_entities(
     current: Dict[Any, T],
     target: Dict[Any, T],
+    ignore_fields: Optional[Set[str]] = None,
 ) -> PatchSet[T]:
     add: List[T] = []
     upd: List[Tuple[T, T]] = []
     delete: List[T] = []
 
-    # Inserts & updates
     for k, tgt in target.items():
         cur = current.get(k)
         if cur is None:
+            logger.debug("AJOUT (clé=%s) cible=%r", k, tgt)
             add.append(tgt)
-        elif not _equals(cur, tgt):
+        elif not _equals(cur, tgt, ignore_fields=ignore_fields):
+            logger.debug("MISE À JOUR (clé=%s) → actuel=%r, cible=%r", k, cur, tgt)
             upd.append((cur, tgt))
 
-    # Deletions
     for k, cur in current.items():
         if k not in target:
+            logger.debug("SUPPRESSION (clé=%s) actuel=%r", k, cur)
             delete.append(cur)
 
     return PatchSet(add, upd, delete)
@@ -159,44 +178,70 @@ def _is_missing(v: Any) -> bool:
     return False
 
 
+
 def diff_fill_missing(
-    db_snapshot: Dict[Any, T],       # ce qu’il y a déjà en base
-    src_snapshot: Dict[Any, T],      # ce que Yuman (ou autre) nous fournit
+    db_snapshot: Dict[Any, T],
+    src_snapshot: Dict[Any, T],
+    *,
+    fields: Optional[List[str]] = None,
+    skip_categories: Optional[List[int]] = None,
+    skip_obsolete: bool = False,
+    category_field_exclusions: Optional[Dict[int, List[str]]] = None,
 ) -> PatchSet[T]:
     """
-    Compare *champ par champ* ; on ne signale qu’un **ADD** ou un **UPDATE**
-    lorsqu’au moins un champ est manquant dans la DB **et** présent dans
-    le snapshot source.
-
-    - Jamais de DELETE ⇒ patch.delete sera toujours vide.
-    - La structure PatchSet est conservée pour ré‑utiliser les
-      apply_*_patch existants ; ils ignoreront simplement la partie delete.
+    Complète uniquement les champs vides spécifiés, en pouvant :
+      – ignorer toute catégorie (ex. modules),
+      – sauter les objets marqués obsolètes,
+      – retirer certains champs du check pour certaines catégories.
     """
+    # 1) paramètres par défaut
+    to_check_base = fields or [
+        "brand", "model", "serial_number", "count",
+        "mppt_idx", "module_brand", "module_model",
+    ]
+    skip_cats = set(skip_categories or [])
+    excl_map  = category_field_exclusions or {}
+
     add: List[T] = []
     upd: List[Tuple[T, T]] = []
 
-    for k, src in src_snapshot.items():
-        db_obj = db_snapshot.get(k)
+    for key, src in src_snapshot.items():
+        # 2) skip obsolètes
+        if skip_obsolete and getattr(src, "is_obsolete", False):
+            continue
 
-        # --- ligne totalement absente en DB -> ADD --------------------
+        # 3) skip catégories entières (modules, etc.)
+        cat = getattr(src, "category_id", None)
+        if cat in skip_cats:
+            continue
+
+        db_obj = db_snapshot.get(key)
+
+        # 4) ligne absente → ADD
         if db_obj is None:
             add.append(src)
             continue
 
-        # --- champ manquant dans la DB ? ------------------------------
+        # 5) build la liste de champs à checker pour cet objet
+        to_check = list(to_check_base)
+        for c in excl_map.get(cat, []):
+            if c in to_check:
+                to_check.remove(c)
+
+        # 6) comparaison ciblée
         if is_dataclass(src) and is_dataclass(db_obj):
             d_db  = asdict(db_obj)
             d_src = asdict(src)
 
-            need_update = any(
-                _is_missing(d_db[col]) and not _is_missing(d_src[col])
-                for col in d_db
-            )
-        else:
-            # Sur des objets simples / scalaires on ne fait rien
-            need_update = False
+            missing = [
+                f for f in to_check
+                if _is_missing(d_db.get(f)) and not _is_missing(d_src.get(f))
+            ]
+            if missing:
+                logger.debug(
+                    "MISE À JOUR (clé=%s) champs manquants=%s | actuel=%r | cible=%r",
+                    key, ", ".join(missing), db_obj, src
+                )
+                upd.append((db_obj, src))
 
-        if need_update:
-            upd.append((db_obj, src))
-
-    return PatchSet(add=add, update=upd, delete=[])  # delete toujours vide
+    return PatchSet(add=add, update=upd, delete=[])  # on ne supprime jamais

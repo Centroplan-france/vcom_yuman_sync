@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 @dataclass(frozen=True)
 class Site:
     name: str
+    id: Optional[int] = None   
     yuman_site_id: Optional[int] = None
     vcom_system_key: Optional[str] = None
     client_map_id: Optional[int] = None 
@@ -40,6 +41,7 @@ class Equipment:
     category_id: int
     eq_type: str
     name: str
+    site_id: Optional[int] | None = None
     vcom_system_key: Optional[str] = None
     yuman_material_id: Optional[int] = None
     vcom_device_id: Optional[str] = None
@@ -48,6 +50,7 @@ class Equipment:
     serial_number: Optional[str] = None
     count: Optional[int] = None                # ex-string_count ?
     parent_id: Optional[str] = None
+    yuman_site_id: Optional[int] | None = None
     
 
 

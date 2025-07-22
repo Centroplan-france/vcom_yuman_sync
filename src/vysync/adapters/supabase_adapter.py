@@ -8,7 +8,7 @@ La clé logique d’un équipement est « vcom_device_id » (string).
 import os
 import logging
 from datetime import datetime, timezone
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 from supabase import create_client, Client as SupabaseClient
 
@@ -24,6 +24,8 @@ from vysync.models import (
     CAT_INVERTER,
     CAT_MODULE,
     CAT_STRING,
+    CAT_SIM,
+    CAT_CENTRALE,
 )
 
 logger = init_logger(__name__)
@@ -46,26 +48,46 @@ class SupabaseAdapter:
     # Internal helpers
     # -----------------------------------------------------------------
     def _refresh_site_cache(self) -> None:
-        """(Re)charge le mapping vcom_system_key → site.id."""
+        """Recharge les mappings vcom_system_key → id et yuman_site_id → id."""
         rows = (
             self.sb.table(SITE_TABLE)
-            .select("id,vcom_system_key")
+            .select("id, vcom_system_key, yuman_site_id")
             .execute()
             .data
             or []
         )
-        self._site_cache: Dict[str, int] = {
-            r["vcom_system_key"]: r["id"] for r in rows
-        }
-        logger.debug("[SB] site cache refreshed (%s entries)", len(self._site_cache))
 
-    def _site_id(self, vcom_key: str) -> int | None:
-        """Retourne l’ID PostgreSQL du site, None si inconnu."""
-        return self._site_cache.get(vcom_key)
+        self._map_vcom_to_id  = {}   
+        self._map_yid_to_id   = {}
+
+        for r in rows:
+            if r["vcom_system_key"]:
+                self._map_vcom_to_id[r["vcom_system_key"]] = r["id"]
+            if r["yuman_site_id"] is not None:
+                self._map_yid_to_id[r["yuman_site_id"]] = r["id"]
+
+        logger.debug("[SB] site cache refreshed (%s entries)", len(rows))
+
+    def _site_id(self, vcom_key: str | None) -> int | None:
+        """Retourne l’ID Supabase via vcom_system_key."""
+        if vcom_key is None:
+            return None
+        return self._map_vcom_to_id.get(vcom_key)
+
+    def _site_id_by_yuman(self, yuman_site_id: int | None) -> int | None:
+        """Retourne l’ID Supabase via yuman_site_id."""
+        if yuman_site_id is None:
+            return None
+        return self._map_yid_to_id.get(yuman_site_id)
+
+
 
     # ----------------------------- SITES -------------------------------
-    def fetch_sites_v(self) -> Dict[str, Site]:
-        rows = self.sb.table(SITE_TABLE).select("*").execute().data or []
+    def fetch_sites_v(self, site_key: Optional[str] = None) -> Dict[str, Site]:
+        query = self.sb.table(SITE_TABLE).select("*")
+        if site_key:
+            query = query.eq('vcom_system_key', site_key)  # Filtrer par site_key
+        rows = query.execute().data or []
         sites: Dict[str, Site] = {}
         for r in rows:
             if not r.get("vcom_system_key"):
@@ -92,6 +114,7 @@ class SupabaseAdapter:
             if not r.get("yuman_site_id"):
                 continue
             sites[r["yuman_site_id"]] = Site(
+                id=r["id"],  
                 vcom_system_key=r["vcom_system_key"],
                 name=r.get("name") or r["vcom_system_key"],
                 latitude=r.get("latitude"),
@@ -101,24 +124,38 @@ class SupabaseAdapter:
                 address=r.get("address"),
                 yuman_site_id=r.get("yuman_site_id"),
                 client_map_id=r.get("client_map_id"),
+                project_number_cp=r.get("project_number_cp"),
+                aldi_store_id=r.get("aldi_store_id"),
+                aldi_id=r.get("aldi_id"),
                 ignore_site=bool(r.get("ignore_site")),
             )
         logger.debug("[SB] fetched %s sites", len(sites))
         return sites
 
     # --------------------------- EQUIPMENTS ----------------------------
-    def fetch_equipments_v(self) -> Dict[str, Equipment]:
+    def fetch_equipments_v(self, site_key: Optional[str] = None) -> Dict[str, Equipment]:
         equips = {}
         from_row, step = 0, 1000       # page de 1 000
         while True:
-            page = (
+            # 1. Prépare la requête de base
+            query = (
                 self.sb.table(EQUIP_TABLE)
                 .select("*")
                 .in_("category_id", [CAT_INVERTER, CAT_MODULE, CAT_STRING])
                 .eq("is_obsolete", False)
-                .range(from_row, from_row + step - 1)   # pagination
+            )
+
+            # 2. Ajoute le filtre site si demandé
+            if site_key:
+                query = query.eq("vcom_system_key", site_key)
+
+            # 3. Paginate
+            page = (
+                query
+                .range(from_row, from_row + step - 1)
                 .execute()
-                .data or []
+                .data
+                or []
             )
             for r in page:
                 equips[r["vcom_device_id"]] = Equipment(
@@ -147,7 +184,7 @@ class SupabaseAdapter:
             page = (
                 self.sb.table(EQUIP_TABLE)
                 .select("*")
-                .in_("category_id", [CAT_INVERTER, CAT_MODULE, CAT_STRING])
+                .in_("category_id", [CAT_INVERTER, CAT_MODULE, CAT_STRING, CAT_SIM, CAT_CENTRALE])
                 .eq("is_obsolete", False)
                 .range(from_row, from_row + step - 1)   # pagination
                 .execute()
@@ -181,6 +218,7 @@ class SupabaseAdapter:
             logger.debug("[SB] INSERT site %s", s.key())
             row = s.to_dict()
             row["created_at"] = _now_iso()        # horodatage UTC
+            row.pop("id", None)
             self.sb.table(SITE_TABLE).insert([row]).execute()
 
         IMMUTABLE_COLS = {"vcom_system_key", "created_at"}
@@ -206,91 +244,76 @@ class SupabaseAdapter:
 
     # ------------------------ APPLY EQUIPS -----------------------------
     def apply_equips_patch(self, patch) -> None:
-        # Récupérer tous les équipements existants pour détecter les doublons
-        existing_rows = (
-            self.sb.table(EQUIP_TABLE)
-            .select("vcom_device_id,vcom_system_key,yuman_material_id")
-            .execute()
-            .data or []
-        )
-        ids_in_db = {r["yuman_material_id"] for r in existing_rows if r.get("yuman_material_id")}
-        keys_in_db = {(r["vcom_device_id"], r["vcom_system_key"]) for r in existing_rows}
-        
-        VALID_COLS: set[str] = {
-                                    "parent_id",
-                                    "is_obsolete",
-                                    "obsolete_at",
-                                    "count",
-                                    "vcom_system_key",
-                                    "eq_type",
-                                    "vcom_device_id",
-                                    "serial_number",
-                                    "brand",
-                                    "model",
-                                    "name",
-                                    "site_id",
-                                    "created_at",
-                                    "extra",
-                                    "yuman_material_id",
-                                    "category_id",
-                                }
-        inserts = []
-        updates = []
-        for e in patch.add:
-            site_id = self._site_id(e.vcom_system_key)
-            if site_id is None:
-                logger.error("[SB] site %s introuvable → skip %s", e.vcom_system_key, e.vcom_device_id)
-                continue
-            row = e.to_dict()
-            row.update(
-                site_id    = site_id,
-                created_at = datetime.now(timezone.utc).isoformat(),
-                name       = row.get("name") or row["vcom_device_id"]
-            )
-            # Filtrer les colonnes valides
-            row = {k: v for k, v in row.items() if k in VALID_COLS}
-            # Décider insert vs update en fonction des doublons
-            if (row.get("yuman_material_id") in ids_in_db) or ((row["vcom_device_id"], row["vcom_system_key"]) in keys_in_db):
-                updates.append(row)
-            else:
-                inserts.append(row)
-        
-        # Insérer les nouveaux équipements (upsert sur vcom_device_id + yuman_material_id)
-        if inserts:
-            try:
-                self.sb.table(EQUIP_TABLE).upsert(
-                    inserts,
-                    on_conflict=["yuman_material_id", "vcom_device_id"],
-                    ignore_duplicates=True
-                ).execute()
-            except Exception as exc:
-                logger.exception("[SB] INSERT failed: %s", exc)
-        
-        # Mettre à jour les équipements existants
-        for row in updates:
-            try:
-                if row.get("yuman_material_id"):
-                    # Mise à jour par yuman_material_id si disponible
-                    self.sb.table(EQUIP_TABLE).update(row) \
-                          .eq("yuman_material_id", row["yuman_material_id"]).execute()
-                else:
-                    # Sinon, mise à jour par vcom_device_id
-                    self.sb.table(EQUIP_TABLE).update(row) \
-                          .eq("vcom_device_id", row["vcom_device_id"]).execute()
-                logger.debug("[SB] UPDATE equip %s", row["vcom_device_id"])
-            except Exception as exc:
-                logger.exception("[SB] UPDATE failed: %s", exc)
+        """
+        Applique le diff (add / update / delete) sur la table des équipements.
+        - patch.add      : list[Equipment]
+        - patch.update   : list[tuple[Equipment, Equipment]]  # (actuel, cible)
+        - patch.delete   : list[Equipment]
+        """
+        VALID_COLS = {
+            "parent_id", "is_obsolete", "obsolete_at", "count",
+            "vcom_system_key", "eq_type", "vcom_device_id",
+            "serial_number", "brand", "model", "name", "site_id",
+            "created_at", "extra", "yuman_material_id", "category_id",
+        }
+        now_iso = datetime.now(timezone.utc).isoformat()
 
-        # ---------- DELETE ----------
-        for e in patch.delete:
-            logger.debug("[SB] Obsolete equip %s", e.vcom_device_id)
-            try:
-                self.sb.table(EQUIP_TABLE) \
-                    .update({"is_obsolete": True, "obsolete_at": datetime.now(timezone.utc).isoformat()}) \
-                    .eq("vcom_device_id", e.vcom_device_id) \
+        # ---------- ADD / UPSERT ----------
+        if patch.add:
+            upserts = []
+            for e in patch.add:
+                site_id = self._site_id(e.vcom_system_key)
+                if site_id is None:
+                    logger.error("[SB] site %s introuvable → skip %s",
+                                e.vcom_system_key, e.vcom_device_id)
+                    continue
+                row = e.to_dict()
+                row.update(
+                    site_id=site_id,
+                    created_at=now_iso,
+                    name=row.get("name") or row["vcom_device_id"],
+                )
+                upserts.append({k: v for k, v in row.items() if k in VALID_COLS})
+
+            if upserts:
+                res = (
+                    self.sb.table(EQUIP_TABLE)
+                    .upsert(upserts, on_conflict=["vcom_device_id"], ignore_duplicates=True)
                     .execute()
-            except Exception as exc:
-                logger.exception("[SB] Obsolete flag failed: %s", exc)
+                )
+                logger.debug("[SB] UPSERT %d equips → %s", len(upserts), res.data)
+
+        # ---------- UPDATE ----------
+        for item in patch.update:
+            # item = (ancien, nouveau)
+            e_new = item[1] if isinstance(item, tuple) else item
+
+            payload = {
+                k: v for k, v in e_new.to_dict().items()
+                if k in VALID_COLS and k not in {"vcom_device_id", "vcom_system_key"}
+            }
+            if not payload:
+                continue  # rien à modifier
+
+            res = (
+                self.sb.table(EQUIP_TABLE)
+                .update(payload)
+                .eq("vcom_device_id", e_new.vcom_device_id)
+                .execute()
+            )
+            logger.debug("[SB] UPDATE %s → %s", e_new.vcom_device_id, res.data)
+
+        # ---------- DELETE (flag obsolète) ----------
+        if patch.delete:
+            dev_ids = [e.vcom_device_id for e in patch.delete]
+            res = (
+                self.sb.table(EQUIP_TABLE)
+                .update({"is_obsolete": True, "obsolete_at": now_iso})
+                .in_("vcom_device_id", dev_ids)
+                .execute()
+            )
+            logger.debug("[SB] FLAG obsolete %d equips → %s", len(dev_ids), res.data)
+
 
 
     def fetch_clients(self) -> Dict[int, Client]:
@@ -350,3 +373,61 @@ class SupabaseAdapter:
                     .update(updates) \
                     .eq("yuman_client_id", new.yuman_client_id) \
                     .execute()
+
+
+    def apply_equips_mapping_patch(self, patch) -> None:
+        TABLE = "equipments_mapping"
+        VALID = {
+            "parent_id", "is_obsolete", "obsolete_at", "count",
+            "vcom_system_key", "eq_type", "vcom_device_id",
+            "serial_number", "brand", "model", "name", "site_id",
+            "created_at", "extra", "yuman_material_id", "category_id",
+        }
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # --------------------- ADD / UPSERT ------------------------
+        rows = []
+        for e in patch.add:
+            sid = e.site_id or self._site_id_by_yuman(e.yuman_site_id)
+            if sid is None:
+                logger.error("[SB] site Yuman %s introuvable → skip %s",
+                            e.yuman_site_id, e.yuman_material_id)
+                continue
+
+            row = {k: v for k, v in e.to_dict().items() if k in VALID}
+            row["site_id"]    = sid
+            row.setdefault("created_at", now_iso)
+            rows.append(row)
+
+        if rows:
+            res = (
+                self.sb.table(TABLE)
+                .upsert(
+                    rows,
+                    on_conflict=["vcom_device_id"],  # ← double clé
+                    ignore_duplicates=False
+                )
+                .execute()
+            )
+            logger.debug("[SB] UPSERT %d equipsMapping → %s", len(rows), res.data)
+
+        # ----------------------- UPDATE ---------------------------
+        for old, e in patch.update:
+            sid = e.site_id or self._site_id_by_yuman(e.yuman_site_id)
+            if sid is None:
+                continue
+
+            payload = {k: v for k, v in e.to_dict().items() if k in VALID}
+            payload["site_id"] = sid
+
+            res = (
+                self.sb.table(TABLE)
+                .upsert(
+                    rows,
+                    on_conflict="vcom_device_id",   # ← correspond à l’index UNIQUE
+                    ignore_duplicates=False         # on veut fusionner
+                )
+                .execute()
+            )
+
+            logger.debug("[SB] UPDATE %s → %s", e.yuman_material_id, res.data)
