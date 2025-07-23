@@ -63,6 +63,7 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
                 category_id     = CAT_MODULE,
                 eq_type         = "module",
                 vcom_device_id  = f"MODULES-{key}",
+                serial_number   = f"MODULES-{key}",
                 name            = "Modules",
                 brand           = p.get("vendor"),
                 model           = p.get("model"),

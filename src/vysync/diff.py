@@ -14,6 +14,7 @@ from vysync.models import Site, Equipment, CAT_MODULE, CAT_STRING, CAT_INVERTER,
 from dateutil.parser import isoparse
 from datetime import datetime
 import logging
+import re
 from vysync.app_logging import init_logger
 logger = init_logger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -40,12 +41,16 @@ def _equals(a: T, b: T, ignore_fields: Optional[set[str]] = None) -> bool:
                     for field in ignore_fields:
                         d.pop(field, None)
 
-                # normaliser commission_date  (ex. 29/04/2025 → 2025-04-29)
+                # normaliser name   clean_new_name = re.sub(r'^\d+\s+|\s*\(.*?\)| France', '', new.name)
+                n = d.get("name")
+                if n is not None:
+                    d["name"] = re.sub(r'^\d+\s+|\s*\(.*?\)| France', '', n)
+
+                # normaliser commission_date  (ex. 29/04/2025 → 2025-04-29)  
                 cd = d.get("commission_date")
                 if cd and "/" in cd:
                     j, m, a = cd.split("/")[:3]
                     d["commission_date"] = f"{a}-{m.zfill(2)}-{j.zfill(2)}"
-
 
                 # arrondir puissance
                 np = d.get("nominal_power")
@@ -96,7 +101,8 @@ def _equip_equals(a: Equipment, b: Equipment, ignore_fields: Optional[Set[str]] 
         return (
             da["brand"].lower()       == db["brand"].lower() and
             da["model"].lower()       == db["model"].lower() and
-            da["count"]               == db["count"]
+            da["count"]               == db["count"] and
+            da["serial_number"]       == db["serial_number"]
         )
     elif cat == CAT_STRING:
         return (

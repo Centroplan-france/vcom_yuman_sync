@@ -264,7 +264,7 @@ class YumanAdapter:
             object.__setattr__(equip, "module_brand", module_brand)
             object.__setattr__(equip, "module_model", module_model)
 
-            equips[m["id"]] = equip  # clé = yuman_material_id
+            equips[m["serial_number"]] = equip  # clé = serial_number
 
         logger.debug("[YUMAN] snapshot: %s equips", len(equips))
         _dump("[YUMAN] snapshot equips", equips)
@@ -402,6 +402,7 @@ class YumanAdapter:
             "site_id":     yuman_site_id,
             "name":        "Centrale",
             "category_id": CAT_CENTRALE,
+            "serial_number" : f"Centrale-{yuman_site_id}"
         })
 
 

@@ -191,7 +191,7 @@ class SupabaseAdapter:
                 .data or []
             )
             for r in page:
-                equips[r["yuman_material_id"]] = Equipment(
+                equips[r["serial_number"]] = Equipment(
                     vcom_system_key=r["vcom_system_key"],
                     category_id=r["category_id"],
                     eq_type=r["eq_type"],
@@ -254,7 +254,7 @@ class SupabaseAdapter:
             "parent_id", "is_obsolete", "obsolete_at", "count",
             "vcom_system_key", "eq_type", "vcom_device_id",
             "serial_number", "brand", "model", "name", "site_id",
-            "created_at", "extra", "yuman_material_id", "category_id",
+            "created_at", "extra", "yuman_material_id", "category_id","yuman_site_id"
         }
         now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -287,6 +287,7 @@ class SupabaseAdapter:
         for item in patch.update:
             # item = (ancien, nouveau)
             e_new = item[1] if isinstance(item, tuple) else item
+            site_id = self._site_id(e_new.vcom_system_key)
 
             payload = {
                 k: v for k, v in e_new.to_dict().items()
@@ -294,6 +295,7 @@ class SupabaseAdapter:
             }
             if not payload:
                 continue  # rien à modifier
+            payload["site_id"]=site_id
 
             res = (
                 self.sb.table(EQUIP_TABLE)
@@ -382,11 +384,14 @@ class SupabaseAdapter:
             "vcom_system_key", "eq_type", "vcom_device_id",
             "serial_number", "brand", "model", "name", "site_id",
             "created_at", "extra", "yuman_material_id", "category_id",
+            # champs custom : si besoin, décommente
+            # "mppt_idx", "module_brand", "module_model",
         }
         now_iso = datetime.now(timezone.utc).isoformat()
 
         # --------------------- ADD / UPSERT ------------------------
-        rows = []
+        dedup: dict[str, dict] = {}          # vcom_device_id → row unique
+
         for e in patch.add:
             sid = e.site_id or self._site_id_by_yuman(e.yuman_site_id)
             if sid is None:
@@ -395,21 +400,23 @@ class SupabaseAdapter:
                 continue
 
             row = {k: v for k, v in e.to_dict().items() if k in VALID}
-            row["site_id"]    = sid
+            row["site_id"] = sid
             row.setdefault("created_at", now_iso)
-            rows.append(row)
 
-        if rows:
+            dedup.setdefault(row["vcom_device_id"], row)
+
+        if dedup:
             res = (
                 self.sb.table(TABLE)
                 .upsert(
-                    rows,
-                    on_conflict=["vcom_device_id"],  # ← double clé
+                    list(dedup.values()),
+                    on_conflict="vcom_device_id",      # contrainte unique
                     ignore_duplicates=False
                 )
                 .execute()
             )
-            logger.debug("[SB] UPSERT %d equipsMapping → %s", len(rows), res.data)
+            logger.debug("[SB] UPSERT %d equipsMapping → %s",
+                        len(dedup), res.data)
 
         # ----------------------- UPDATE ---------------------------
         for old, e in patch.update:
@@ -422,12 +429,8 @@ class SupabaseAdapter:
 
             res = (
                 self.sb.table(TABLE)
-                .upsert(
-                    rows,
-                    on_conflict="vcom_device_id",   # ← correspond à l’index UNIQUE
-                    ignore_duplicates=False         # on veut fusionner
-                )
+                .update(payload)
+                .eq("vcom_device_id", e.vcom_device_id)   # filtre stable
                 .execute()
             )
-
-            logger.debug("[SB] UPDATE %s → %s", e.yuman_material_id, res.data)
+            logger.debug("[SB] UPDATE %s → %s", e.vcom_device_id, res.data)
