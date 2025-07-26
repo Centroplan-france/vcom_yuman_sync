@@ -24,7 +24,7 @@ from vysync.adapters.vcom_adapter import fetch_snapshot
 from vysync.adapters.supabase_adapter import SupabaseAdapter
 from vysync.adapters.yuman_adapter import YumanAdapter
 from vysync.vcom_client import VCOMAPIClient
-from vysync.diff import diff_entities, diff_fill_missing
+from vysync.diff import diff_entities, diff_fill_missing, set_parent_map
 from vysync.conflict_resolution import detect_and_resolve_site_conflicts, resolve_clients_for_sites
 
 # ─────────────────────────── Logger ────────────────────────────
@@ -101,23 +101,23 @@ def main() -> None:
     # -----------------------------------------------------------
     # PHASE 1 B – YUMAN → Supabase (mapping)
     # -----------------------------------------------------------
-    # logger.info("[YUMAN→DB] snapshot & patch fill‑missing …")
+    logger.info("[YUMAN→DB] snapshot & patch fill‑missing …")
 
-    # 1) on prend UN SEUL snapshot Yuman
+    #1) on prend UN SEUL snapshot Yuman
     y_clients = list(y.yc.list_clients())
     y_sites   = y.fetch_sites()
     y_equips  = y.fetch_equips()
 
-    # 2) on lit en base les mappings existants
+    #2) on lit en base les mappings existants
     db_clients = sb.fetch_clients()      # -> Dict[int, Client]
     db_maps_sites  = sb.fetch_sites_y()    # -> Dict[int, SiteMapping]
     db_maps_equips = sb.fetch_equipments_y()   # -> Dict[str, EquipMapping]
 
-    # 3) on génère des patchs « fill missing » (pas de supprimer)
+    #3) on génère des patchs « fill missing » (pas de supprimer)
     patch_clients = diff_fill_missing(db_clients,     {c["id"]: c for c in y_clients})
     patch_maps_sites  = diff_fill_missing(db_maps_sites,  y_sites, fields=["yuman_site_id","code", "client_map_id", "name",  "aldi_id","aldi_store_id","project_number_cp","commission_date","nominal_power"])
     patch_maps_equips = diff_fill_missing(db_maps_equips, y_equips, fields=["category_id","eq_type", "name", "yuman_material_id",
-                                                                              "serial_number","brand","model","count","parent_id"])
+                                                                              "serial_number","brand","model","count","parent_id", "yuman_site_id"])
 
     logger.info(
         "[YUMAN→DB] Clients Δ +%d  ~%d  -%d",
@@ -138,7 +138,7 @@ def main() -> None:
         len(patch_maps_equips.delete),
     )
 
-    # 4) on ré‑utilise les mêmes apply_*_patch de SupabaseAdapter
+    #4) on ré‑utilise les mêmes apply_*_patch de SupabaseAdapter
     sb.apply_clients_mapping_patch(patch_clients)
     sb.apply_sites_patch(patch_maps_sites)
     sb.apply_equips_mapping_patch(patch_maps_equips) 
@@ -182,7 +182,16 @@ def main() -> None:
         patch=patch_s,
     )
 
+
     logger.info("[DB→YUMAN] Synchronisation des équipements…")
+
+    # 1) mapping parent : vcom_device_id → yuman_material_id
+    id_by_vcom = {
+        e.vcom_device_id: e.yuman_material_id
+        for e in y_equips.values()
+        if e.yuman_material_id
+    }
+    set_parent_map(id_by_vcom)
     patch_e = diff_entities(y_equips, sb_equips, ignore_fields={"vcom_system_key", "yuman_site_id"})
     logger.info(
         "[DB→YUMAN] Equips Δ  +%d  ~%d  -%d",

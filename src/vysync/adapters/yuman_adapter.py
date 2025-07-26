@@ -417,27 +417,29 @@ class YumanAdapter:
         patch: PatchSet[Equipment] | None = None,
     ) -> None:
         """
-        Synchronise modules, onduleurs et strings entre VCOM (db_equips)
-        et Yuman (liste courante). On peut passer y_equips ou directement patch
-        pour éviter un double fetch/diff.
+        Fait converger Yuman vers la vérité Supabase pour **tous** les
+        équipements (modules, onduleurs, strings, SIM, centrale).
+
+        • add      → création Yuman
+        • update   → PATCH Yuman sur *tous* les champs métier listés
+        • delete   → flag `is_obsolete = true` côté Supabase + suppression Yuman
         """
-        # 1) récupération / diff si besoin
+        # 1 ─ Fetch / diff si absent
         if patch is None:
             if y_equips is None:
                 y_equips = self.fetch_equips()
             patch = diff_entities(y_equips, db_equips)
 
-        # cache {vcom_device_id → yuman_material_id} pour lien parent string→onduleur
-        id_by_vcom = {
+        # 2 ─ Index (vcom_device_id → yuman_material_id) pour lier les strings
+        id_by_vcom: dict[str, int] = {
             e.vcom_device_id: e.yuman_material_id
             for e in (y_equips or {}).values()
             if e.yuman_material_id
         }
 
-        # ordre d’insertion : modules → onduleurs → strings
-        _ORDER = {CAT_MODULE: 0, CAT_INVERTER: 1, CAT_STRING: 2}
+        # 3 ─ Constantes utiles
+        _ORDER = {CAT_MODULE: 0, CAT_INVERTER: 1, CAT_STRING: 2, CAT_CENTRALE: 3, CAT_SIM: 4}
 
-        # Blueprints custom
         BP_MODEL        = 13548
         BP_INVERTER_ID  = 13977
         BP_MPPT_IDX     = STRING_FIELDS["MPPT index"]
@@ -445,9 +447,9 @@ class YumanAdapter:
         BP_MODULE_BRAND = STRING_FIELDS["marque du module"]
         BP_MODULE_MODEL = STRING_FIELDS["model de module"]
 
-        # ───────────────────────── INSERTIONS ────────────────────────────
+        # ───────────────────────── INSERTIONS ──────────────────────────── #
         for e in sorted(patch.add, key=lambda x: _ORDER.get(x.category_id, 99)):
-            # 1) mapping site VCOM → Yuman
+            # 3.1 mapping site
             site_row = (
                 self.sb.sb.table("sites_mapping")
                 .select("yuman_site_id")
@@ -458,28 +460,30 @@ class YumanAdapter:
             )
             if not site_row or not site_row["yuman_site_id"]:
                 logger.warning("Site %s sans yuman_site_id → skip equip %s",
-                               e.vcom_system_key, e.vcom_device_id)
+                            e.vcom_system_key, e.vcom_device_id)
                 continue
 
             payload: Dict[str, Any] = {
                 "site_id":       site_row["yuman_site_id"],
                 "category_id":   e.category_id,
-                "brand":         e.brand,
-                "serial_number": e.serial_number or e.vcom_device_id,
                 "name":          e.name,
+                "brand":         e.brand,
+                "model":         e.model,
+                "serial_number": e.serial_number or e.vcom_device_id,
             }
             fields: List[Dict[str, Any]] = []
 
-            # blueprint "Modèle"
+            # modèle générique
             if e.model:
-                fields.append({"blueprint_id": BP_MODEL, "name": "Modèle", "value": e.model})
-                payload["model"] = e.model
+                fields.append({"blueprint_id": BP_MODEL, "value": e.model})
 
-            # champ custom "Numéro de série"
-            if e.serial_number:
-                payload["Numéro de série"] = e.serial_number
+            # MODULE spécifique (compte, marque, modèle)
+            if e.category_id == CAT_MODULE:
+                # pas de champs custom pour l’instant : payload suffit
+                if e.count is not None:
+                    payload["count"] = e.count
 
-            # blueprint "Inverter ID (Vcom)"
+            # INVERTER spécifique
             if e.category_id == CAT_INVERTER:
                 fields.append({
                     "blueprint_id": BP_INVERTER_ID,
@@ -487,7 +491,7 @@ class YumanAdapter:
                     "value": e.vcom_device_id
                 })
 
-            # champs string_pv
+            # STRING spécifique
             if e.category_id == CAT_STRING:
                 try:
                     mppt_idx = e.vcom_device_id.split("-MPPT-", 1)[1]
@@ -499,29 +503,25 @@ class YumanAdapter:
                     {"blueprint_id": BP_MODULE_BRAND, "value": e.brand},
                     {"blueprint_id": BP_MODULE_MODEL, "value": e.model},
                 ])
+                # parent → onduleur
+                if e.parent_id and (pid := id_by_vcom.get(e.parent_id)):
+                    payload["parent_id"] = pid
 
+            # appliquer les champs custom
             if fields:
                 payload["fields"] = fields
 
-            # associer strings → onduleur
-            if e.category_id == CAT_STRING and e.parent_id:
-                parent_mat = id_by_vcom.get(e.parent_id)
-                if parent_mat:
-                    payload["parent_id"] = parent_mat
-
             logger.debug("[YUMAN] create_material payload=%s", payload)
             mat = self.yc.create_material(payload)
-            _dump("[YUMAN] material created", mat)
 
-            # re-patcher immédiatement les fields (limite API)
-            if "fields" in payload and payload["fields"]:
+            # patch immédiat des fields (quota Yuman oblige)
+            if fields:
                 try:
-                    self.yc.update_material(mat["id"], {"fields": payload["fields"]})
+                    self.yc.update_material(mat["id"], {"fields": fields})
                 except Exception as exc:
-                    logger.warning("Yuman post-patch (fields) failed on %s: %s",
-                                   mat["id"], exc)
+                    logger.warning("Yuman post‑patch fields failed on %s: %s", mat["id"], exc)
 
-            # stocke l’ID Yuman en DB et met à jour le cache
+            # persistance en DB
             self.sb.sb.table("equipments_mapping") \
                 .update({"yuman_material_id": mat["id"]}) \
                 .eq("vcom_device_id", e.vcom_device_id) \
@@ -529,9 +529,9 @@ class YumanAdapter:
                 .execute()
             id_by_vcom[e.vcom_device_id] = mat["id"]
 
-        # ─────────────────────────  MISE À JOUR  ─────────────────────────
+        # ─────────────────────────  MISE À JOUR  ───────────────────────── #
         for old, new in patch.update:
-            # back-fill de l’ID Yuman si manquant
+            # back‑fill yuman_material_id si manquant
             if new.yuman_material_id is None and old.yuman_material_id:
                 self.sb.sb.table("equipments_mapping") \
                     .update({"yuman_material_id": old.yuman_material_id}) \
@@ -542,52 +542,74 @@ class YumanAdapter:
             payload: Dict[str, Any] = {}
             fields_patch: List[Dict[str, Any]] = []
 
-            # renommage onduleur
-            if old.category_id == CAT_INVERTER and old.name != new.name:
-                payload["name"] = new.name
+            # -------- CHAMPS COMMUNS (toutes catégories) --------
+            def _set(attr: str, target: Dict[str, Any] = payload):
+                ov, nv = getattr(old, attr), getattr(new, attr)
+                if (ov or "") != (nv or "") and nv is not None:
+                    target[attr] = nv
 
-            # mise à jour parent pour string
-            if old.category_id == CAT_STRING and new.parent_id:
-                parent_mat = id_by_vcom.get(new.parent_id)
-                if parent_mat and old.parent_id != parent_mat:
-                    payload["parent_id"] = parent_mat
+            _set("name")
+            _set("brand")
+            _set("model")
+            _set("serial_number")
+            _set("count")
 
-            # custom "Inverter ID (Vcom)"
-            if old.category_id == CAT_INVERTER and old.vcom_device_id != new.vcom_device_id:
-                fields_patch.append({"blueprint_id": BP_INVERTER_ID, "value": new.vcom_device_id})
+            # -------- CAT_SPÉCIFIQUES --------
+            if old.category_id == CAT_INVERTER:
+                if old.vcom_device_id != new.vcom_device_id:
+                    fields_patch.append({"blueprint_id": BP_INVERTER_ID,
+                                        "value": new.vcom_device_id})
 
-            # custom "Model"
-            if old.model != new.model and new.model:
-                fields_patch.append({"blueprint_id": BP_MODEL, "value": new.model})
-
-            # champs custom string
             if old.category_id == CAT_STRING:
+                # parent
+                if new.parent_id and old.parent_id != new.parent_id:
+                    parent_mat = id_by_vcom.get(new.parent_id)
+                    if parent_mat:
+                        payload["parent_id"] = parent_mat
+                # champs custom
                 def _maybe(bp, ov, nv):
                     if (ov or "") != (nv or ""):
                         fields_patch.append({"blueprint_id": bp, "value": nv})
 
-                old_mppt      = getattr(old, "mppt_idx", "")
-                old_nb        = getattr(old, "nb_modules", "")
-                old_brand     = getattr(old, "module_brand", "")
-                old_modmodel  = getattr(old, "module_model", "")
+                old_mppt     = getattr(old, "mppt_idx", "")
+                old_nb       = getattr(old, "nb_modules", "")
+                old_bmod     = getattr(old, "module_brand", "")
+                old_mmodel   = getattr(old, "module_model", "")
 
                 try:
                     new_mppt = new.vcom_device_id.split("-MPPT-")[1].split(".")[0]
                 except Exception:
                     new_mppt = "?"
-                new_nb        = str(new.count or "")
-                new_brand     = new.brand or ""
-                new_modmodel  = new.model or ""
 
-                _maybe(BP_MPPT_IDX,     old_mppt,     new_mppt)
-                _maybe(BP_NB_MODULES,   old_nb,       new_nb)
-                _maybe(BP_MODULE_BRAND, old_brand,    new_brand)
-                _maybe(BP_MODULE_MODEL, old_modmodel, new_modmodel)
+                _maybe(BP_MPPT_IDX,     old_mppt,   new_mppt)
+                _maybe(BP_NB_MODULES,   old_nb,     str(new.count or ""))
+                _maybe(BP_MODULE_BRAND, old_bmod,   new.brand or "")
+                _maybe(BP_MODULE_MODEL, old_mmodel, new.model or "")
+
+            # aucun champ custom particulier pour CAT_MODULE / CAT_SIM /
+            # CAT_CENTRALE ; le payload générique suffit.
 
             if fields_patch:
                 payload["fields"] = fields_patch
 
             if payload:
                 logger.debug("[YUMAN] update_material %s payload=%s",
-                             old.yuman_material_id, payload)
+                            old.yuman_material_id, payload)
                 self.yc.update_material(old.yuman_material_id, payload)
+
+        # ─────────────────────────  DELETE  ─────────────────────────── #
+        # if patch.delete:
+        #     # flag « obsoletes » côté Supabase + suppression Yuman
+        #     dev_ids = [e.vcom_device_id for e in patch.delete]
+        #     self.sb.sb.table("equipments_mapping") \
+        #         .update({"is_obsolete": True, "obsolete_at": _now_iso()}) \
+        #         .in_("vcom_device_id", dev_ids) \
+        #         .execute()
+
+        #     for e in patch.delete:
+        #         if e.yuman_material_id:
+        #             try:
+        #                 self.yc.delete_material(e.yuman_material_id)
+        #             except Exception as exc:
+        #                 logger.warning("Yuman delete_material failed on %s: %s",
+        #                             e.yuman_material_id, exc)

@@ -30,6 +30,16 @@ class PatchSet(NamedTuple, Generic[T]):
     def is_empty(self) -> bool:
         return not (self.add or self.update or self.delete)
 
+_parent_map: Dict[str, int] = {}
+
+def set_parent_map(mapping: Dict[str, int]) -> None:
+    """
+    Fournit le mapping { vcom_device_id: yuman_material_id }
+    utilisable dans _equip_equals pour normaliser parent_id.
+    """
+    global _parent_map
+    _parent_map = mapping
+
 
 def _equals(a: T, b: T, ignore_fields: Optional[set[str]] = None) -> bool:
     """Égalité ‘profonde’ compatible dataclass/non-dataclass."""
@@ -105,6 +115,10 @@ def _equip_equals(a: Equipment, b: Equipment, ignore_fields: Optional[Set[str]] 
             da["serial_number"]       == db["serial_number"]
         )
     elif cat == CAT_STRING:
+        # Remap du parent_id VCOM → Yuman
+        if da.get("parent_id","") :
+            pa = da.get("parent_id","")
+            da["parent_id"] = _parent_map.get(pa, pa)
         return (
             da["name"]                == db["name"] and
             da["brand"].lower()       == db["brand"].lower() and
@@ -203,7 +217,7 @@ def diff_fill_missing(
     # 1) paramètres par défaut
     to_check_base = fields or [
         "brand", "model", "serial_number", "count",
-        "mppt_idx", "module_brand", "module_model",
+        "mppt_idx", "module_brand", "module_model","yuman_site_id"
     ]
     skip_cats = set(skip_categories or [])
     excl_map  = category_field_exclusions or {}

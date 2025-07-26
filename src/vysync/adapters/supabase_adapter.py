@@ -170,6 +170,7 @@ class SupabaseAdapter:
                     count=r.get("count"),
                     parent_id=r.get("parent_id"),
                     yuman_material_id=r.get("yuman_material_id"),
+                    
                 )
             if len(page) < step:
                 break        # dernière page atteinte
@@ -203,6 +204,7 @@ class SupabaseAdapter:
                     count=r.get("count"),
                     parent_id=r.get("parent_id"),
                     yuman_material_id=r.get("yuman_material_id"),
+                    yuman_site_id=r.get("yuman_site_id"),
                 )
             if len(page) < step:
                 break        # dernière page atteinte
@@ -221,7 +223,7 @@ class SupabaseAdapter:
             row.pop("id", None)
             self.sb.table(SITE_TABLE).insert([row]).execute()
 
-        IMMUTABLE_COLS = {"vcom_system_key", "created_at"}
+        IMMUTABLE_COLS = {"vcom_system_key", "created_at", "ignore_site"}
 
         for old, new in patch.update:
             # Construire le dict des champs à updater
@@ -273,7 +275,7 @@ class SupabaseAdapter:
                     created_at=now_iso,
                     name=row.get("name") or row["vcom_device_id"],
                 )
-                upserts.append({k: v for k, v in row.items() if k in VALID_COLS})
+                upserts.append({k: v for k, v in row.items() if v is not None and k in VALID_COLS})
 
             if upserts:
                 res = (
@@ -291,7 +293,7 @@ class SupabaseAdapter:
 
             payload = {
                 k: v for k, v in e_new.to_dict().items()
-                if k in VALID_COLS and k not in {"vcom_device_id", "vcom_system_key"}
+                if v is not None and k in VALID_COLS and k not in {"vcom_device_id", "vcom_system_key"}
             }
             if not payload:
                 continue  # rien à modifier
@@ -383,7 +385,7 @@ class SupabaseAdapter:
             "parent_id", "is_obsolete", "obsolete_at", "count",
             "vcom_system_key", "eq_type", "vcom_device_id",
             "serial_number", "brand", "model", "name", "site_id",
-            "created_at", "extra", "yuman_material_id", "category_id",
+            "created_at", "extra", "yuman_material_id", "category_id","yuman_site_id"
             # champs custom : si besoin, décommente
             # "mppt_idx", "module_brand", "module_model",
         }
@@ -410,8 +412,8 @@ class SupabaseAdapter:
                 self.sb.table(TABLE)
                 .upsert(
                     list(dedup.values()),
-                    on_conflict="vcom_device_id",      # contrainte unique
-                    ignore_duplicates=False
+                    on_conflict=["vcom_device_id", "yuman_material_id"],      # contrainte unique
+                    ignore_duplicates=True
                 )
                 .execute()
             )
@@ -420,17 +422,36 @@ class SupabaseAdapter:
 
         # ----------------------- UPDATE ---------------------------
         for old, e in patch.update:
+            # 1) Résolution du site
             sid = e.site_id or self._site_id_by_yuman(e.yuman_site_id)
             if sid is None:
                 continue
 
-            payload = {k: v for k, v in e.to_dict().items() if k in VALID}
+            # 2) Construction du payload : on exclut les None, et les clés d'identification
+            payload = {
+                k: v
+                for k, v in e.to_dict().items()
+                if v is not None
+                and k in VALID
+                and k not in {"vcom_device_id", "yuman_material_id", "vcom_system_key"}
+            }
+            # on remet site_id à jour
             payload["site_id"] = sid
 
-            res = (
-                self.sb.table(TABLE)
-                .update(payload)
-                .eq("vcom_device_id", e.vcom_device_id)   # filtre stable
-                .execute()
-            )
-            logger.debug("[SB] UPDATE %s → %s", e.vcom_device_id, res.data)
+            # si payload vide, on skip
+            if not payload:
+                continue
+
+            # 3) Construction de la requête : on utilise vcom_device_id si dispo,
+            #    sinon yuman_material_id comme filtre
+            query = self.sb.table(TABLE).update(payload)
+            if e.vcom_device_id:
+                query = query.eq("vcom_device_id", e.vcom_device_id)
+                ident = f"vcom_device_id = {e.vcom_device_id}"
+            else:
+                query = query.eq("yuman_material_id", e.yuman_material_id)
+                ident = f"yuman_material_id = {e.yuman_material_id}"
+
+            # 4) Exécution
+            res = query.execute()
+            logger.debug(f"[SB] UPDATE ({ident}) → {res.data}")

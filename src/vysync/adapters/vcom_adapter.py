@@ -6,7 +6,7 @@ from __future__ import annotations
 """Transforme la sortie de VCOMAPIClient en snapshot ``Site`` / ``Equipment``."""
 
 
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Any
 from vysync.models import Site, Equipment, CAT_INVERTER, CAT_MODULE, CAT_STRING
 from vysync.vcom_client import VCOMAPIClient  # réutilise ton client existant
 from vysync.app_logging import init_logger, _dump
@@ -20,6 +20,12 @@ from vysync.models import (
 
 logger = init_logger(__name__)
 
+
+def build_address(addr: Dict[str, Any]) -> str | None:
+    if not addr:
+        return None
+    parts = [addr.get("street"), f"{addr.get('postalCode', '')} {addr.get('city', '')}".strip()]
+    return ", ".join(filter(None, parts)) or None
 
 def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] | None = None) -> Tuple[Dict[str, Site], Dict[Tuple[str, str], Equipment]]:
     """Retourne deux dictionnaires : ``sites`` et ``equips``.
@@ -50,7 +56,8 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
             longitude       = det.get("coordinates", {}).get("longitude"),
             nominal_power   = tech.get("nominalPower"),
             commission_date = det.get("commissionDate"),
-            address         = det.get("address", {}).get("street"),
+            address         = build_address(det.get("address", {})),
+            site_area       = tech.get("siteArea"),
         )
         sites[site.key()] = site
 

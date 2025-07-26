@@ -14,7 +14,7 @@ from .app_logging import init_logger
 logger = init_logger(__name__)
 
 DEFAULT_PER_PAGE   = 100   
-DEFAULT_MAX_RETRY  = 5
+DEFAULT_MAX_RETRY  = 10
 DEFAULT_BACKOFF    = 2.0   
 
 
