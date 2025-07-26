@@ -116,9 +116,8 @@ def _equip_equals(a: Equipment, b: Equipment, ignore_fields: Optional[Set[str]] 
         )
     elif cat == CAT_STRING:
         # Remap du parent_id VCOM → Yuman
-        if da.get("parent_id","") :
-            pa = da.get("parent_id","")
-            da["parent_id"] = _parent_map.get(pa, pa)
+        pb = db.get("parent_id","")
+        db["parent_id"] = _parent_map.get(pb, pb)
         return (
             da["name"]                == db["name"] and
             da["brand"].lower()       == db["brand"].lower() and
