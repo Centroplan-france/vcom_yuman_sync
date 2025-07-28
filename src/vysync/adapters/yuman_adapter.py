@@ -236,7 +236,7 @@ class YumanAdapter:
 
             name   = (m.get("name")          or "").strip()
             brand  = (m.get("brand")         or "").strip()
-            model  = (m.get("model")         or "").strip()
+            model  = (raw_fields.get("Modèle")         or "").strip()
             serial = (m.get("serial_number") or "").strip()
 
             # ---------------------------------------------------------
@@ -468,7 +468,6 @@ class YumanAdapter:
                 "category_id":   e.category_id,
                 "name":          e.name,
                 "brand":         e.brand,
-                "model":         e.model,
                 "serial_number": e.serial_number or e.vcom_device_id,
             }
             fields: List[Dict[str, Any]] = []
@@ -550,7 +549,6 @@ class YumanAdapter:
 
             _set("name")
             _set("brand")
-            _set("model")
             _set("serial_number")
             _set("count")
 
@@ -559,7 +557,15 @@ class YumanAdapter:
                 if old.vcom_device_id != new.vcom_device_id:
                     fields_patch.append({"blueprint_id": BP_INVERTER_ID,
                                         "value": new.vcom_device_id})
+                if old.model != new.model:
+                    fields_patch.append({"blueprint_id": BP_MODEL,
+                                        "value": new.model})
 
+            if old.category_id == CAT_MODULE:
+                if old.model != new.model:
+                    fields_patch.append({"blueprint_id": BP_MODEL,
+                                        "value": new.model})
+                    
             if old.category_id == CAT_STRING:
                 # parent
                 if new.parent_id and old.parent_id != new.parent_id:

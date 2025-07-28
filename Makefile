@@ -8,7 +8,7 @@ test:
 	poetry run pytest -q
 
 sync_db:
-	poetry run python src/vysync/sync_db_vcom_yuman.py
+	poetry run python -m vysync.cli
 
 sync_tickets:
-	poetry run python src/vysync/sync_tickets_workorders.py
+	poetry run python -m vysync.sync_tickets_workorders

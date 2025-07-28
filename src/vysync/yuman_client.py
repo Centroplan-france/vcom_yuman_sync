@@ -102,12 +102,12 @@ class YumanClient:  # pylint: disable=too-many-public-methods
 
             try:
                 body = kwargs.get("json") or kwargs.get("data")
-                # if logger.isEnabledFor(logging.DEBUG):
-                #     logger.debug(
-                #         "[YUMAN ➜] %s %s payload=%s",
-                #         method, endpoint,
-                #         None if body is None else json.dumps(body, ensure_ascii=False, default=str)[:1500]
-                #     )
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "[YUMAN ➜] %s %s payload=%s",
+                        method, endpoint,
+                        None if body is None else json.dumps(body, ensure_ascii=False, default=str)[:1500]
+                    )
 
                 resp: Response = self.session.request(
                     method,
@@ -116,15 +116,15 @@ class YumanClient:  # pylint: disable=too-many-public-methods
                     **kwargs,
                 )
 
-                # if logger.isEnabledFor(logging.DEBUG):
-                #     try:
-                #         dbg_resp = json.dumps(resp.json(), ensure_ascii=False, sort_keys=True)[:1500]
-                #     except ValueError:
-                #         dbg_resp = resp.text
-                #     logger.debug(
-                #         "[YUMAN ⇠] %s %s status=%s\nresp=%s",
-                #         method, endpoint, resp.status_code, dbg_resp
-                #     )
+                if logger.isEnabledFor(logging.DEBUG):
+                    try:
+                        dbg_resp = json.dumps(resp.json(), ensure_ascii=False, sort_keys=True)[:1500]
+                    except ValueError:
+                        dbg_resp = resp.text
+                    logger.debug(
+                        "[YUMAN ⇠] %s %s status=%s\nresp=%s",
+                        method, endpoint, resp.status_code, dbg_resp
+                    )
 
             except requests.RequestException as exc:  # network error
                 if attempt > self.max_retry:
