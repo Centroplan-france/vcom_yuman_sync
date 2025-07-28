@@ -1,0 +1,28 @@
+name: Sync tickets daily
+
+on:
+  schedule:
+    - cron: '0 5 * * *'   # tous les jours à 7h (heure de Paris = UTC+2, donc 5h UTC)
+  workflow_dispatch:       # permet aussi de le déclencher manuellement
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install poetry
+          poetry install
+
+      - name: Run script
+        run: |
+          poetry run python -m vysync.sync_tickets_workorders
