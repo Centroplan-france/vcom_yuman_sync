@@ -1,5 +1,6 @@
 name: Sync tickets daily
 
+
 on:
   schedule:
     - cron: '0 5 * * *'   # tous les jours à 7h (heure de Paris = UTC+2, donc 5h UTC)
@@ -24,5 +25,14 @@ jobs:
           poetry install
 
       - name: Run script
+        env:
+            SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+            SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}               
+            DATABASE_URL: ${{ secrets.DATABASE_URL }}
+            YUMAN_TOKEN: ${{ secrets.YUMAN_TOKEN }}           
+            VCOM_API_KEY: ${{ secrets.VCOM_API_KEY }}               
+            VCOM_USERNAME: ${{ secrets.VCOM_USERNAME }}               
+            VCOM_PASSWORD: ${{ secrets.VCOM_PASSWORD }}
+
         run: |
           poetry run python -m vysync.sync_tickets_workorders
