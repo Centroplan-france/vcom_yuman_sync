@@ -24,6 +24,65 @@ jobs:
           pip install poetry
           poetry install
 
+      
+      - name: Sync Yuman → Supabase mappings
+        run: |
+          poetry run python - << 'EOF'
+          import logging
+          from vysync.app_logging import init_logger
+          from vysync.adapters.supabase_adapter import SupabaseAdapter
+          from vysync.adapters.yuman_adapter     import YumanAdapter
+          from vysync.diff                     import diff_fill_missing
+
+          # logger
+          logger = init_logger(__name__)
+          logger.setLevel(logging.INFO)
+
+          # 1) snapshot Yuman
+          sb = SupabaseAdapter()
+          y  = YumanAdapter(sb)
+          logger.info("[YUMAN→DB] snapshot & patch fill-missing …")
+          y_clients = list(y.yc.list_clients())
+          y_sites   = y.fetch_sites()
+          y_equips  = y.fetch_equips()
+
+          # 2) mappings existants en base
+          db_clients      = sb.fetch_clients()
+          db_maps_sites   = sb.fetch_sites_y()
+          db_maps_equips  = sb.fetch_equipments_y()
+
+          # 3) diff « fill missing »
+          patch_clients     = diff_fill_missing(db_clients,     {c["id"]: c for c in y_clients})
+          patch_maps_sites  = diff_fill_missing(db_maps_sites,  y_sites,  fields=[
+            "yuman_site_id","code","client_map_id","name",
+            "aldi_id","aldi_store_id","project_number_cp",
+            "commission_date","nominal_power"
+          ])
+          patch_maps_equips = diff_fill_missing(db_maps_equips, y_equips, fields=[
+            "category_id","eq_type","name","yuman_material_id",
+            "serial_number","brand","model","count",
+            "parent_id","yuman_site_id"
+          ])
+
+          logger.info(
+              "[YUMAN→DB] Clients     Δ +%d  ~%d  -%d",
+              len(patch_clients.add), len(patch_clients.update), len(patch_clients.delete),
+          )
+          logger.info(
+              "[YUMAN→DB] SitesMapping  Δ +%d  ~%d  -%d",
+              len(patch_maps_sites.add), len(patch_maps_sites.update), len(patch_maps_sites.delete),
+          )
+          logger.info(
+              "[YUMAN→DB] EquipsMapping Δ +%d  ~%d  -%d",
+              len(patch_maps_equips.add), len(patch_maps_equips.update), len(patch_maps_equips.delete),
+          )
+
+          # 4) application des patchs
+          sb.apply_clients_mapping_patch(patch_clients)
+          sb.apply_sites_patch(patch_maps_sites)
+          sb.apply_equips_mapping_patch(patch_maps_equips)
+          EOF    
+
       - name: Run script
         env:
             SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

@@ -159,6 +159,7 @@ def assign_tickets_to_active_workorders(
             .select("*")
             .eq("system_key", system_key)
             .not_.in_("status", ["assigned", "inProgress"])
+            .not_.in_("priority", "low")
             .is_("yuman_workorder_id", None)
             .execute()
         )

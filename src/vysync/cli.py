@@ -59,96 +59,96 @@ def main() -> None:
     sb = SupabaseAdapter()
     y  = YumanAdapter(sb)
 
-    # # -----------------------------------------------------------
-    # # PHASE 1 A – VCOM → Supabase
-    # # -----------------------------------------------------------
-    # db_sites   = sb.fetch_sites_v(site_key=site_key)
-    # db_equips  = sb.fetch_equipments_v(site_key=site_key)
-    # known_sys  = set(db_sites.keys())
+    # -----------------------------------------------------------
+    # PHASE 1 A – VCOM → Supabase
+    # -----------------------------------------------------------
+    db_sites   = sb.fetch_sites_v(site_key=site_key)
+    db_equips  = sb.fetch_equipments_v(site_key=site_key)
+    known_sys  = set(db_sites.keys())
 
-    # # snapshot VCOM
-    # v_sites, v_equips = fetch_snapshot(vc, vcom_system_key=site_key, skip_keys=None if maj_all or site_key else known_sys,    )
-    # if site_key:
-    #     v_sites  = {k: s for k, s in v_sites.items() if k == site_key}
-    #     v_equips = {k: e for k, e in v_equips.items() if e.vcom_system_key == site_key}
+    # snapshot VCOM
+    v_sites, v_equips = fetch_snapshot(vc, vcom_system_key=site_key, skip_keys=None if maj_all or site_key else known_sys,    )
+    if site_key:
+        v_sites  = {k: s for k, s in v_sites.items() if k == site_key}
+        v_equips = {k: e for k, e in v_equips.items() if e.vcom_system_key == site_key}
 
-    # # filtrage incrémental
-    # if not maj_all and not site_key:
-    #     seen = set(v_sites)
-    #     db_sites  = {k: s for k, s in db_sites.items()  if k in seen}
-    #     db_equips = {k: e for k, e in db_equips.items() if e.vcom_system_key in seen}
+    # filtrage incrémental
+    if not maj_all and not site_key:
+        seen = set(v_sites)
+        db_sites  = {k: s for k, s in db_sites.items()  if k in seen}
+        db_equips = {k: e for k, e in db_equips.items() if e.vcom_system_key in seen}
 
-    # # diff & patch
-    # patch_sites = diff_entities(db_sites, v_sites, ignore_fields={"yuman_site_id", "client_map_id", "code", "ignore_site"})
-    # patch_equips = diff_entities(db_equips, v_equips, ignore_fields={"yuman_material_id", "parent_id"})
+    # diff & patch
+    patch_sites = diff_entities(db_sites, v_sites, ignore_fields={"yuman_site_id", "client_map_id", "code", "ignore_site"})
+    patch_equips = diff_entities(db_equips, v_equips, ignore_fields={"yuman_material_id", "parent_id"})
 
-    # logger.info(
-    #     "[VCOM→DB] Sites  Δ  +%d  ~%d  -%d",
-    #     len(patch_sites.add),
-    #     len(patch_sites.update),
-    #     len(patch_sites.delete),
-    # )
-    # logger.info(
-    #     "[VCOM→DB] Equips Δ  +%d  ~%d  -%d",
-    #     len(patch_equips.add),
-    #     len(patch_equips.update),
-    #     len(patch_equips.delete),
-    # )
+    logger.info(
+        "[VCOM→DB] Sites  Δ  +%d  ~%d  -%d",
+        len(patch_sites.add),
+        len(patch_sites.update),
+        len(patch_sites.delete),
+    )
+    logger.info(
+        "[VCOM→DB] Equips Δ  +%d  ~%d  -%d",
+        len(patch_equips.add),
+        len(patch_equips.update),
+        len(patch_equips.delete),
+    )
 
-    # sb.apply_sites_patch(patch_sites)
-    # sb.apply_equips_patch(patch_equips)
+    sb.apply_sites_patch(patch_sites)
+    sb.apply_equips_patch(patch_equips)
 
-    # # -----------------------------------------------------------
-    # # PHASE 1 B – YUMAN → Supabase (mapping)
-    # # -----------------------------------------------------------
-    # logger.info("[YUMAN→DB] snapshot & patch fill‑missing …")
+    # -----------------------------------------------------------
+    # PHASE 1 B – YUMAN → Supabase (mapping)
+    # -----------------------------------------------------------
+    logger.info("[YUMAN→DB] snapshot & patch fill‑missing …")
 
-    # #1) on prend UN SEUL snapshot Yuman
-    # y_clients = list(y.yc.list_clients())
-    # y_sites   = y.fetch_sites()
-    # y_equips  = y.fetch_equips()
+    #1) on prend UN SEUL snapshot Yuman
+    y_clients = list(y.yc.list_clients())
+    y_sites   = y.fetch_sites()
+    y_equips  = y.fetch_equips()
 
-    # #2) on lit en base les mappings existants
-    # db_clients = sb.fetch_clients()      # -> Dict[int, Client]
-    # db_maps_sites  = sb.fetch_sites_y()    # -> Dict[int, SiteMapping]
-    # db_maps_equips = sb.fetch_equipments_y()   # -> Dict[str, EquipMapping]
+    #2) on lit en base les mappings existants
+    db_clients = sb.fetch_clients()      # -> Dict[int, Client]
+    db_maps_sites  = sb.fetch_sites_y()    # -> Dict[int, SiteMapping]
+    db_maps_equips = sb.fetch_equipments_y()   # -> Dict[str, EquipMapping]
 
-    # #3) on génère des patchs « fill missing » (pas de supprimer)
-    # patch_clients = diff_fill_missing(db_clients,     {c["id"]: c for c in y_clients})
-    # patch_maps_sites  = diff_fill_missing(db_maps_sites,  y_sites, fields=["yuman_site_id","code", "client_map_id", "name",  "aldi_id","aldi_store_id","project_number_cp","commission_date","nominal_power"])
-    # patch_maps_equips = diff_fill_missing(db_maps_equips, y_equips, fields=["category_id","eq_type", "name", "yuman_material_id",
-    #                                                                           "serial_number","brand","model","count","parent_id", "yuman_site_id"])
+    #3) on génère des patchs « fill missing » (pas de supprimer)
+    patch_clients = diff_fill_missing(db_clients,     {c["id"]: c for c in y_clients})
+    patch_maps_sites  = diff_fill_missing(db_maps_sites,  y_sites, fields=["yuman_site_id","code", "client_map_id", "name",  "aldi_id","aldi_store_id","project_number_cp","commission_date","nominal_power"])
+    patch_maps_equips = diff_fill_missing(db_maps_equips, y_equips, fields=["category_id","eq_type", "name", "yuman_material_id",
+                                                                              "serial_number","brand","model","count","parent_id", "yuman_site_id"])
 
-    # logger.info(
-    #     "[YUMAN→DB] Clients Δ +%d  ~%d  -%d",
-    #     len(patch_clients.add),
-    #     len(patch_clients.update),
-    #     len(patch_clients.delete),
-    # )
-    # logger.info(
-    #     "[YUMAN→DB] SitesMapping  Δ +%d  ~%d  -%d",
-    #     len(patch_maps_sites.add),
-    #     len(patch_maps_sites.update),
-    #     len(patch_maps_sites.delete),
-    # )
-    # logger.info(
-    #     "[YUMAN→DB] EquipsMapping Δ +%d  ~%d  -%d",
-    #     len(patch_maps_equips.add),
-    #     len(patch_maps_equips.update),
-    #     len(patch_maps_equips.delete),
-    # )
+    logger.info(
+        "[YUMAN→DB] Clients Δ +%d  ~%d  -%d",
+        len(patch_clients.add),
+        len(patch_clients.update),
+        len(patch_clients.delete),
+    )
+    logger.info(
+        "[YUMAN→DB] SitesMapping  Δ +%d  ~%d  -%d",
+        len(patch_maps_sites.add),
+        len(patch_maps_sites.update),
+        len(patch_maps_sites.delete),
+    )
+    logger.info(
+        "[YUMAN→DB] EquipsMapping Δ +%d  ~%d  -%d",
+        len(patch_maps_equips.add),
+        len(patch_maps_equips.update),
+        len(patch_maps_equips.delete),
+    )
 
-    # #4) on ré‑utilise les mêmes apply_*_patch de SupabaseAdapter
-    # sb.apply_clients_mapping_patch(patch_clients)
-    # sb.apply_sites_patch(patch_maps_sites)
-    # sb.apply_equips_mapping_patch(patch_maps_equips) 
+    #4) on ré‑utilise les mêmes apply_*_patch de SupabaseAdapter
+    sb.apply_clients_mapping_patch(patch_clients)
+    sb.apply_sites_patch(patch_maps_sites)
+    sb.apply_equips_mapping_patch(patch_maps_equips) 
 
-    # # -----------------------------------------------------------
-    # # PHASE 1 C – Résolution manuelle des conflits de sites
-    # # -----------------------------------------------------------
-    # logger.info("[CONFLIT] début de la résolution des conflits …")
-    # detect_and_resolve_site_conflicts(sb, y)
-    # resolve_clients_for_sites(sb, y)
+    # -----------------------------------------------------------
+    # PHASE 1 C – Résolution manuelle des conflits de sites
+    # -----------------------------------------------------------
+    logger.info("[CONFLIT] début de la résolution des conflits …")
+    detect_and_resolve_site_conflicts(sb, y)
+    resolve_clients_for_sites(sb, y)
 
     # --- re‑charge Supabase et yuman après résolution
     
