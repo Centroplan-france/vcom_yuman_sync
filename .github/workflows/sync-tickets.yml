@@ -1,10 +1,9 @@
 name: Sync tickets daily
 
-
 on:
   schedule:
-    - cron: '0 5 * * *'   # tous les jours à 7h (heure de Paris = UTC+2, donc 5h UTC)
-  workflow_dispatch:       # permet aussi de le déclencher manuellement
+    - cron: '0 5 * * *'   # tous les jours à 7h (UTC+2 l'été, UTC+1 l'hiver)
+  workflow_dispatch:
 
 jobs:
   run-script:
@@ -12,7 +11,7 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -22,25 +21,25 @@ jobs:
       - name: Install dependencies
         run: |
           pip install poetry
+          poetry config virtualenvs.create false
           poetry install
 
-      
       - name: Sync Yuman → Supabase mappings
         env:
-              SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-              SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}               
-              DATABASE_URL: ${{ secrets.DATABASE_URL }}
-              YUMAN_TOKEN: ${{ secrets.YUMAN_TOKEN }}           
-              VCOM_API_KEY: ${{ secrets.VCOM_API_KEY }}               
-              VCOM_USERNAME: ${{ secrets.VCOM_USERNAME }}               
-              VCOM_PASSWORD: ${{ secrets.VCOM_PASSWORD }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          YUMAN_TOKEN: ${{ secrets.YUMAN_TOKEN }}
+          VCOM_API_KEY: ${{ secrets.VCOM_API_KEY }}
+          VCOM_USERNAME: ${{ secrets.VCOM_USERNAME }}
+          VCOM_PASSWORD: ${{ secrets.VCOM_PASSWORD }}
         run: |
           poetry run python - << 'EOF'
           import logging
           from vysync.app_logging import init_logger
           from vysync.adapters.supabase_adapter import SupabaseAdapter
           from vysync.adapters.yuman_adapter     import YumanAdapter
-          from vysync.diff                     import diff_fill_missing
+          from vysync.diff                       import diff_fill_missing
 
           # logger
           logger = init_logger(__name__)
@@ -52,24 +51,17 @@ jobs:
           logger.info("[YUMAN→DB] snapshot & patch fill-missing …")
           y_clients = list(y.yc.list_clients())
           y_sites   = y.fetch_sites()
-          y_equips  = y.fetch_equips()
 
           # 2) mappings existants en base
           db_clients      = sb.fetch_clients()
           db_maps_sites   = sb.fetch_sites_y()
-          db_maps_equips  = sb.fetch_equipments_y()
 
           # 3) diff « fill missing »
           patch_clients     = diff_fill_missing(db_clients,     {c["id"]: c for c in y_clients})
           patch_maps_sites  = diff_fill_missing(db_maps_sites,  y_sites,  fields=[
-            "yuman_site_id","code","client_map_id","name",
-            "aldi_id","aldi_store_id","project_number_cp",
-            "commission_date","nominal_power"
-          ])
-          patch_maps_equips = diff_fill_missing(db_maps_equips, y_equips, fields=[
-            "category_id","eq_type","name","yuman_material_id",
-            "serial_number","brand","model","count",
-            "parent_id","yuman_site_id"
+              "yuman_site_id","code","client_map_id","name",
+              "aldi_id","aldi_store_id","project_number_cp",
+              "commission_date","nominal_power"
           ])
 
           logger.info(
@@ -80,26 +72,20 @@ jobs:
               "[YUMAN→DB] SitesMapping  Δ +%d  ~%d  -%d",
               len(patch_maps_sites.add), len(patch_maps_sites.update), len(patch_maps_sites.delete),
           )
-          logger.info(
-              "[YUMAN→DB] EquipsMapping Δ +%d  ~%d  -%d",
-              len(patch_maps_equips.add), len(patch_maps_equips.update), len(patch_maps_equips.delete),
-          )
 
           # 4) application des patchs
           sb.apply_clients_mapping_patch(patch_clients)
           sb.apply_sites_patch(patch_maps_sites)
-          sb.apply_equips_mapping_patch(patch_maps_equips)
-          EOF    
+          EOF
 
       - name: Run script
         env:
-            SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-            SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}               
-            DATABASE_URL: ${{ secrets.DATABASE_URL }}
-            YUMAN_TOKEN: ${{ secrets.YUMAN_TOKEN }}           
-            VCOM_API_KEY: ${{ secrets.VCOM_API_KEY }}               
-            VCOM_USERNAME: ${{ secrets.VCOM_USERNAME }}               
-            VCOM_PASSWORD: ${{ secrets.VCOM_PASSWORD }}
-
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          YUMAN_TOKEN: ${{ secrets.YUMAN_TOKEN }}
+          VCOM_API_KEY: ${{ secrets.VCOM_API_KEY }}
+          VCOM_USERNAME: ${{ secrets.VCOM_USERNAME }}
+          VCOM_PASSWORD: ${{ secrets.VCOM_PASSWORD }}
         run: |
           poetry run python -m vysync.sync_tickets_workorders
