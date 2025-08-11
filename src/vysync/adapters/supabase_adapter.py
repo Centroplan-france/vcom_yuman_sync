@@ -8,15 +8,14 @@ La clé logique d’un équipement est « vcom_device_id » (string).
 import os
 import logging
 from datetime import datetime, timezone
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, Optional
 
 from supabase import create_client, Client as SupabaseClient
 
-from datetime import datetime, timezone
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-from vysync.app_logging import init_logger, _dump
+from vysync.app_logging import init_logger
 from vysync.models import (
     Site,
     Equipment,

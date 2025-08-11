@@ -11,8 +11,6 @@ Le résultat est un PatchSet (add, update, delete) sérialisable.
 from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, Generic, List, Tuple, TypeVar, NamedTuple, Optional, Set
 from vysync.models import Site, Equipment, CAT_MODULE, CAT_STRING, CAT_INVERTER, CAT_CENTRALE, CAT_SIM
-from dateutil.parser import isoparse
-from datetime import datetime
 import logging
 import re
 from vysync.app_logging import init_logger

@@ -7,16 +7,8 @@ from __future__ import annotations
 
 
 from typing import Dict, Tuple, Any
-from vysync.models import Site, Equipment, CAT_INVERTER, CAT_MODULE, CAT_STRING
-from vysync.vcom_client import VCOMAPIClient  # réutilise ton client existant
 from vysync.app_logging import init_logger, _dump
-from vysync.models import (
-    Site,
-    Equipment,
-    CAT_INVERTER,
-    CAT_MODULE,
-    CAT_STRING,
-)
+from vysync.models import Site, Equipment, CAT_INVERTER, CAT_MODULE, CAT_STRING
 
 logger = init_logger(__name__)
 
