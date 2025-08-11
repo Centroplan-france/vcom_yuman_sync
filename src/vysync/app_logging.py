@@ -1,4 +1,4 @@
-import logging, json, pprint, os
+import logging, json, os
 from logging.handlers import RotatingFileHandler
 
 LOG_PATH = os.getenv("VYSYNC_LOG", "sync_debug.log")      # ⇦ export VYSYNC_LOG=...
