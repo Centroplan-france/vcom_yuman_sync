@@ -13,9 +13,6 @@ packages = [
 python = "^3.11"
 requests = "^2.32.4"
 python-dotenv = "^1.1.0"
-sqlmodel = "^0.0.24"
-psycopg = {version = "^3.2.9", extras = ["binary"]}
-psycopg2-binary = "^2.9.10"
 supabase = "^2.3"
 
 

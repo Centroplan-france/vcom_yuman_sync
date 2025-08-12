@@ -1,5 +1,5 @@
-psycopg[binary]
 python-dotenv
 requests
-sqlmodel
+supabase
 pytest
+requests-mock
