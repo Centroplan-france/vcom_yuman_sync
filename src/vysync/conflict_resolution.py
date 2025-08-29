@@ -181,14 +181,8 @@ def _merge_sites(sb, yc: YumanClient,
     vcom_key = v_row["vcom_system_key"]
 
     # 2) appeler l'API Yuman pour renseigner le champ personnalisé
-    yc.update_site(
-        site_id=yuman_id,
-        fields=[
-            {"blueprint_id": 13583,  # ex. 13583
-            "name": "System Key (Vcom ID)",
-            "value": vcom_key}
-        ]
-    )
+    yc.update_site(yuman_id, {"fields": [
+    {"blueprint_id": 13583, "name": "System Key (Vcom ID)", "value": vcom_key}]})
 
     # 6) Marquer le conflit résolu
     sb.table(CONFLICT_TABLE).update({"resolved": True, "resolved_at": _now()}) \
