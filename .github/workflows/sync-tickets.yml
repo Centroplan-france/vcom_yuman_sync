@@ -56,6 +56,20 @@ jobs:
           db_clients      = sb.fetch_clients()
           db_maps_sites   = sb.fetch_sites_y()
 
+          from vysync.adapters.supabase_adapter import Client
+
+          def to_client(row: dict) -> Client:
+              return Client(
+                  yuman_client_id = row["id"],
+                  name            = row.get("name"),
+                  code            = row.get("code"),
+                  # privilégie l'adresse « address », sinon fallback sur « billing_address »
+                  address         = row.get("address") or row.get("billing_address")
+              )
+          
+          y_clients = { r["id"]: to_client(r) for r in y_clients_raw }
+
+
           # 3) diff « fill missing »
           patch_clients     = diff_fill_missing(db_clients,     {c["id"]: c for c in y_clients})
           patch_maps_sites  = diff_fill_missing(db_maps_sites,  y_sites,  fields=[
