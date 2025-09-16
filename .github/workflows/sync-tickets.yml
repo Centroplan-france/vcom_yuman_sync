@@ -71,7 +71,7 @@ jobs:
 
 
           # 3) diff « fill missing »
-          patch_clients     = diff_fill_missing(db_clients,     {c["id"]: c for c in y_clients})
+          patch_clients    = diff_fill_missing(db_clients,    y_clients)
           patch_maps_sites  = diff_fill_missing(db_maps_sites,  y_sites,  fields=[
               "yuman_site_id","code","client_map_id","name",
               "aldi_id","aldi_store_id","project_number_cp",
