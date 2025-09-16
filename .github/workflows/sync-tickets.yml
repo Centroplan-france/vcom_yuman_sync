@@ -49,7 +49,7 @@ jobs:
           sb = SupabaseAdapter()
           y  = YumanAdapter(sb)
           logger.info("[YUMAN→DB] snapshot & patch fill-missing …")
-          y_clients = list(y.yc.list_clients())
+          y_clients_raw = list(y.yc.list_clients())
           y_sites   = y.fetch_sites()
 
           # 2) mappings existants en base
