@@ -274,7 +274,12 @@ class VCOMAPIClient:
         return resp.status_code == 204
 
     def close_ticket(self, ticket_id: str, summary: str = "Closed via API") -> bool:
-        delete_outage(ticket_id)
+        outage_deleted = self.delete_outage(ticket_id)
+        if not outage_deleted:
+            logger.warning(
+                "Échec de la suppression de l'outage pour le ticket %s avant fermeture",
+                ticket_id,
+            )
         return self.update_ticket(ticket_id, status="closed", summary=summary)
 
     def delete_outage(self, ticket_id: str) -> bool:
