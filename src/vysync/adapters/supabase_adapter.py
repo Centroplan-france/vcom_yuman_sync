@@ -97,6 +97,7 @@ class SupabaseAdapter:
                 latitude=r.get("latitude"),
                 longitude=r.get("longitude"),
                 nominal_power=r.get("nominal_power"),
+                site_area=r.get("site_area"),
                 commission_date=r.get("commission_date"),
                 address=r.get("address"),
                 yuman_site_id=r.get("yuman_site_id"),

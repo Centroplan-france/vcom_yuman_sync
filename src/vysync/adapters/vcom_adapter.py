@@ -19,17 +19,18 @@ def build_address(addr: Dict[str, Any]) -> str | None:
     parts = [addr.get("street"), f"{addr.get('postalCode', '')} {addr.get('city', '')}".strip()]
     return ", ".join(filter(None, parts)) or None
 
+from typing import Tuple, Dict
+
 def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] | None = None) -> Tuple[Dict[str, Site], Dict[Tuple[str, str], Equipment]]:
     """Retourne deux dictionnaires : ``sites`` et ``equips``.
 
-    • Si ``vcom_system_key`` est fourni, on ne récupère que ce système.  
-    • Les STRING PV sont inclus ; leur ``parent_vcom_id`` pointe vers
-      l’onduleur (utile plus tard pour déterminer la hiérarchie).
+    • Si ``vcom_system_key`` est fourni, on ne récupère que ce système.
+    • Les STRING PV sont inclus ; leur ``parent_vcom_id`` pointe vers l’onduleur
+      (utile plus tard pour déterminer la hiérarchie).
     """
     sites: Dict[str, Site] = {}
     equips: Dict[tuple[str, str], Equipment] = {}
 
-    
     for sys in vc.get_systems():
         key = sys["key"]
         # -- filtre ----------------------------------------------------------------
@@ -37,10 +38,11 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
             continue                         # ① on ne veut qu’un site précis
         if skip_keys and key in skip_keys:
             continue                         # ② déjà connu en DB – on saute
-        tech = vc.get_technical_data(key)
-        det = vc.get_system_details(key)
 
-        # --- Site --------------------------------------------------------------------------
+        tech = vc.get_technical_data(key)
+        det  = vc.get_system_details(key)
+
+        # --- Site ----------------------------------------------------------------
         site = Site(
             vcom_system_key = key,
             name            = sys.get("name") or key,
@@ -53,7 +55,34 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
         )
         sites[site.key()] = site
 
-        # --- Modules ---------------------------------------------------
+        # -------------------------------------------------------------------------
+        # SIM (category_id = 11382), eq_type = "sim"
+        sim_sn = f"SIM-{key}"
+        sim_eq = Equipment(
+            vcom_system_key = key,
+            category_id     = 11382,            # SIM
+            eq_type         = "sim",
+            vcom_device_id  = sim_sn,             # demandé 
+            serial_number   = sim_sn,             # demandé 
+            name            = "Carte SIM",
+        )
+        equips[sim_eq.key()] = sim_eq
+
+        # -------------------------------------------------------------------------
+        # PLANT (category_id = 11441), eq_type = "plant"
+        plant_sn = f"central-{key}"            # demandé : "Centrale-<vcom_system_key>"
+        plant_eq = Equipment(
+            vcom_system_key = key,
+            category_id     = 11441,            # PLANT
+            eq_type         = "plant",
+            vcom_device_id  = plant_sn,         # demandé
+            serial_number   = plant_sn,         # demandé
+            name            = "Centrale",
+        )
+        equips[plant_eq.key()] = plant_eq
+        
+
+        # --- Modules --------------------------------------------------------------
         panels = tech.get("panels") or []
         if panels:
             p = panels[0]
@@ -70,14 +99,12 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
             )
             equips[mod.key()] = mod
 
-        # --- Onduleurs -------------------------------------------------
+        # --- Onduleurs -----------------------------------------------------------
         inverters = vc.get_inverters(key)
 
         # on garantit un ordre stable pour attribuer les index (WR 1, WR 2, …)
         for idx, inv in enumerate(inverters, start=1):
-
             det_inv = vc.get_inverter_details(key, inv["id"])
-
             inv_eq = Equipment(
                 vcom_system_key = key,
                 category_id     = CAT_INVERTER,
@@ -90,43 +117,51 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
             )
             equips[inv_eq.key()] = inv_eq
 
-        # STRING PV ------------------------------------------------------
-        inv_by_idx   = {idx: inv for idx, inv in enumerate(inverters, start=1)}
-        
-        SLOTS_PER_MPPT = 2          # hypothèse : au max 2 strings (1.1 / 1.2) par MPPT
+        # --- STRING PV -----------------------------------------------------------
+        inv_by_idx      = {idx: inv for idx, inv in enumerate(inverters, start=1)}
+        SLOTS_PER_MPPT  = 2  # au max 2 strings (1.1 / 1.2) par MPPT
 
         for idx_cfg, cfg in enumerate(tech.get("systemConfigurations", []), start=1):
             inv = inv_by_idx.get(idx_cfg)
             if not inv:
                 continue
 
-            slot_idx = 0  # index théorique de slot pour l'onduleur
+            slot_idx    = 0  # index théorique de slot pour l'onduleur
             mppt_inputs = cfg.get("mpptInputs", {})
+
             # tri numérique des MPPT : "1", "2", "3" ...
             for mppt_num in sorted(mppt_inputs, key=int):
                 inp = mppt_inputs[mppt_num]
 
-                for n in range(1, SLOTS_PER_MPPT + 1):     # slot 1 puis 2
-                    slot_idx += 1                          # avance toujours
+                for n in range(1, SLOTS_PER_MPPT + 1):   # slot 1 puis 2
+                    slot_idx += 1                        # avance toujours
                     if n > inp["stringCount"]:
-                        continue                           # slot vide -> on saute la création
-                    parent_vcom = inv["id"]        
-                    idx_str   = f"{mppt_num}.{n}"          # ex. "3.1"
-                    vdid_base = f"STRING-{slot_idx}-WR{idx_cfg}-MPPT-{idx_str}"
-                    vdid_unique   = f"{vdid_base}-{key}"       # ← unicité inter-sites
+                        continue                         # slot vide -> on saute
+
+                    parent_vcom = inv["id"]
+                    idx_str     = f"{mppt_num}.{n}"      # ex. "3.1"
+
+                    # forcer deux chiffres sur l'index de string
+                    slot_label  = f"{slot_idx:02d}"      # 1 -> "01", 7 -> "07", 12 -> "12"
+
+                    # utiliser le label paddé pour le nom et l'ID
+                    vdid_base   = f"STRING-{slot_label}-WR{idx_cfg}-MPPT-{idx_str}"
+                    vdid_unique = f"{vdid_base}-{key}"   # unicité inter-sites
+
                     str_eq = Equipment(
                         vcom_system_key = key,
                         category_id     = CAT_STRING,
                         eq_type         = "string_pv",
-                        vcom_device_id  = vdid_unique,         # DB/Yuman → serial_number
-                        name            = vdid_base,           # Yuman « name » sans clé site
-                        brand=inp["module"].get("vendor"),
-                        model=inp["module"].get("model"),
-                        serial_number = vdid_unique,
-                        count=inp["modulesPerString"],
-                        parent_id=parent_vcom,
+                        vcom_device_id  = vdid_unique,   # DB/Yuman → serial_number
+                        name            = vdid_base,     # Yuman « name » sans clé site
+                        brand           = inp["module"].get("vendor"),
+                        model           = inp["module"].get("model"),
+                        serial_number   = vdid_unique,
+                        count           = inp["modulesPerString"],
+                        parent_id       = parent_vcom,
                     )
                     equips[str_eq.key()] = str_eq
+
 
     logger.info("[VCOM] snapshot: %s sites, %s equips", len(sites), len(equips))
     _dump("[VCOM] sites", {k: s.to_dict() for k,s in sites.items()})

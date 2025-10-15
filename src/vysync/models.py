@@ -56,7 +56,7 @@ class Equipment:
 
     # --- clé « métier » -----------------------------------
     def key(self) -> str:
-        return self.vcom_device_id
+        return self.serial_number
 
     # --- sérialisation -----------------------------------
     def to_dict(self) -> Dict[str, Any]:
@@ -66,11 +66,11 @@ class Equipment:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Equipment):
             return NotImplemented
-        return self.vcom_device_id == other.vcom_device_id
+        return self.serial_number == other.serial_number
 
     # --- hash cohérent avec __eq__ ----------------------- ③
     def __hash__(self) -> int:
-        return hash(self.vcom_device_id)
+        return hash(self.serial_number)
 
 # ───────────────────────── Clients ───────────────────────────
 @dataclass(frozen=True)

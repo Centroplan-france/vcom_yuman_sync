@@ -136,7 +136,7 @@ def _equip_equals(a: Equipment, b: Equipment, ignore_fields: Optional[Set[str]] 
         )
     elif cat == CAT_CENTRALE:
         return (
-            da["name"]                == db["name"]            
+            da["serial_number"]                == db["serial_number"]            
         )
     elif cat == CAT_SIM:
         return (
