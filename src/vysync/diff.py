@@ -195,6 +195,8 @@ def _is_missing(v: Any) -> bool:
     return False
 
 
+def _serial_key(s: str | None) -> str:
+    return (s or "").strip().upper()
 
 def diff_fill_missing(
     db_snapshot: Dict[Any, T],
@@ -206,15 +208,26 @@ def diff_fill_missing(
     category_field_exclusions: Optional[Dict[int, List[str]]] = None,
 ) -> PatchSet[T]:
     """
-    Complète uniquement les champs vides spécifiés, en pouvant :
-      – ignorer toute catégorie (ex. modules),
-      – sauter les objets marqués obsolètes,
-      – retirer certains champs du check pour certaines catégories.
+    Complète uniquement les champs vides spécifiés, avec requalification
+    ADD→UPDATE si on retrouve l'objet par serial_number ou yuman_material_id.
+    Refuse les ADD avec serial vide.
     """
-    # 1) paramètres par défaut
+    # 0) index secondaires (indépendants de la clé 'key' du dict)
+    db_by_serial = {
+        _serial_key(getattr(v, "serial_number", None)): v
+        for v in db_snapshot.values()
+        if getattr(v, "serial_number", None)
+    }
+    db_by_mid = {
+        getattr(v, "yuman_material_id"): v
+        for v in db_snapshot.values()
+        if getattr(v, "yuman_material_id", None) is not None
+    }
+
+    # 1) paramètres
     to_check_base = fields or [
         "brand", "model", "serial_number", "count",
-        "mppt_idx", "module_brand", "module_model","yuman_site_id"
+        "mppt_idx", "module_brand", "module_model", "yuman_site_id"
     ]
     skip_cats = set(skip_categories or [])
     excl_map  = category_field_exclusions or {}
@@ -223,23 +236,53 @@ def diff_fill_missing(
     upd: List[Tuple[T, T]] = []
 
     for key, src in src_snapshot.items():
-        # 2) skip obsolètes
+        # 2) obsolètes
         if skip_obsolete and getattr(src, "is_obsolete", False):
             continue
 
-        # 3) skip catégories entières (modules, etc.)
+        # 3) catégories à ignorer
         cat = getattr(src, "category_id", None)
         if cat in skip_cats:
             continue
 
         db_obj = db_snapshot.get(key)
 
-        # 4) ligne absente → ADD
+        # 4) ligne absente sous la clé → tenter une requalification
         if db_obj is None:
+            sk  = _serial_key(getattr(src, "serial_number", None))
+            mid = getattr(src, "yuman_material_id", None)
+
+            # 4.a) serial vide → on NE créé PAS (sinon collision et incohérence)
+            if not sk:
+                logger.warning(
+                    "diff_fill_missing: ADD SKIPPED (serial vide) key=%r src=%r",
+                    key, src
+                )
+                continue
+
+            # 4.b) trouvé en DB par yuman_material_id → UPDATE
+            if mid is not None and mid in db_by_mid:
+                logger.debug(
+                    "diff_fill_missing: REQUALIFY ADD→UPDATE via yuman_material_id=%r | key=%r",
+                    mid, key
+                )
+                upd.append((db_by_mid[mid], src))
+                continue
+
+            # 4.c) trouvé en DB par serial → UPDATE
+            if sk in db_by_serial:
+                logger.debug(
+                    "diff_fill_missing: REQUALIFY ADD→UPDATE via serial=%r | key=%r",
+                    sk, key
+                )
+                upd.append((db_by_serial[sk], src))
+                continue
+
+            # 4.d) vraiment nouveau → ADD
             add.append(src)
             continue
 
-        # 5) build la liste de champs à checker pour cet objet
+        # 5) champs à vérifier (fill-missing)
         to_check = list(to_check_base)
         for c in excl_map.get(cat, []):
             if c in to_check:
@@ -261,4 +304,4 @@ def diff_fill_missing(
                 )
                 upd.append((db_obj, src))
 
-    return PatchSet(add=add, update=upd, delete=[])  # on ne supprime jamais
+    return PatchSet(add=add, update=upd, delete=[])  # jamais de delete ici

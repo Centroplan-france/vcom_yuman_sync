@@ -15,6 +15,9 @@ from supabase import create_client, Client as SupabaseClient
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+def _norm_serial(s: str | None) -> str:
+    return (s or "").strip().upper()
+
 from vysync.app_logging import init_logger
 from vysync.models import (
     Site,
@@ -141,7 +144,6 @@ class SupabaseAdapter:
             query = (
                 self.sb.table(EQUIP_TABLE)
                 .select("*")
-                .in_("category_id", [CAT_INVERTER, CAT_MODULE, CAT_STRING])
                 .eq("is_obsolete", False)
             )
 
@@ -185,7 +187,6 @@ class SupabaseAdapter:
             page = (
                 self.sb.table(EQUIP_TABLE)
                 .select("*")
-                .in_("category_id", [CAT_INVERTER, CAT_MODULE, CAT_STRING, CAT_SIM, CAT_CENTRALE])
                 .eq("is_obsolete", False)
                 .range(from_row, from_row + step - 1)   # pagination
                 .execute()
@@ -244,79 +245,124 @@ class SupabaseAdapter:
         # Le cache doit refléter les nouveaux sites avant d’insérer des équipements
         self._refresh_site_cache()
 
-    # ------------------------ APPLY EQUIPS -----------------------------
+        # ------------------------ APPLY EQUIPS -----------------------------
+
+
     def apply_equips_patch(self, patch) -> None:
-        """
-        Applique le diff (add / update / delete) sur la table des équipements.
-        - patch.add      : list[Equipment]
-        - patch.update   : list[tuple[Equipment, Equipment]]  # (actuel, cible)
-        - patch.delete   : list[Equipment]
-        """
         VALID_COLS = {
             "parent_id", "is_obsolete", "obsolete_at", "count",
             "vcom_system_key", "eq_type", "vcom_device_id",
             "serial_number", "brand", "model", "name", "site_id",
-            "created_at", "extra", "yuman_material_id", "category_id","yuman_site_id"
+            "created_at", "extra", "yuman_material_id", "category_id", "yuman_site_id"
         }
         now_iso = datetime.now(timezone.utc).isoformat()
 
-        # ---------- ADD / UPSERT ----------
+        # ---------- ADD / UPSERT (update-on-conflict) ----------
         if patch.add:
             upserts = []
             for e in patch.add:
                 site_id = self._site_id(e.vcom_system_key)
                 if site_id is None:
-                    logger.error("[SB] site %s introuvable → skip %s",
+                    logger.error("[SB] site %s introuvable → skip ADD %s",
                                 e.vcom_system_key, e.vcom_device_id)
                     continue
+
                 row = e.to_dict()
+                # normalisation serial
+                row["serial_number"] = _norm_serial(row.get("serial_number"))
+                if not row["serial_number"]:
+                    logger.error("[SB] ADD SKIPPED (serial vide) cat=%s vcom=%s mid=%s",
+                                row.get("category_id"), row.get("vcom_system_key"),
+                                row.get("yuman_material_id"))
+                    continue
+
                 row.update(
                     site_id=site_id,
                     created_at=now_iso,
-                    name=row.get("name") or row["vcom_device_id"],
+                    name=row.get("name") or row.get("vcom_device_id"),
                 )
                 upserts.append({k: v for k, v in row.items() if v is not None and k in VALID_COLS})
 
             if upserts:
+                # IMPORTANT: pas de ignore_duplicates → on veut UPDATE sur conflit
                 res = (
                     self.sb.table(EQUIP_TABLE)
-                    .upsert(upserts, on_conflict=["vcom_device_id"], ignore_duplicates=True)
+                    .upsert(upserts, on_conflict="serial_number")
                     .execute()
                 )
                 logger.debug("[SB] UPSERT %d equips → %s", len(upserts), res.data)
 
         # ---------- UPDATE ----------
         for item in patch.update:
-            # item = (ancien, nouveau)
             e_new = item[1] if isinstance(item, tuple) else item
-            site_id = self._site_id(e_new.vcom_system_key)
 
             payload = {
                 k: v for k, v in e_new.to_dict().items()
                 if v is not None and k in VALID_COLS and k not in {"vcom_device_id", "vcom_system_key"}
             }
             if not payload:
-                continue  # rien à modifier
-            payload["site_id"]=site_id
+                continue
 
-            res = (
-                self.sb.table(EQUIP_TABLE)
-                .update(payload)
-                .eq("vcom_device_id", e_new.vcom_device_id)
-                .execute()
-            )
-            logger.debug("[SB] UPDATE %s → %s", e_new.vcom_device_id, res.data)
+            # normaliser serial côté payload
+            if "serial_number" in payload:
+                payload["serial_number"] = _norm_serial(payload["serial_number"])
+
+            # site_id (si résoluble)
+            site_id = self._site_id(e_new.vcom_system_key)
+            if site_id is not None:
+                payload["site_id"] = site_id
+
+            # UPDATE par serial d’abord
+            serial_new = _norm_serial(e_new.serial_number)
+            updated = False
+            if serial_new:
+                res = (
+                    self.sb.table(EQUIP_TABLE)
+                    .update(payload)
+                    .eq("serial_number", serial_new)
+                    .execute()
+                )
+                updated = bool(res.data)  # Supabase renvoie [] si 0 ligne
+
+            # Fallback par yuman_material_id si 0 ligne touchée
+            if not updated and e_new.yuman_material_id is not None:
+                res = (
+                    self.sb.table(EQUIP_TABLE)
+                    .update(payload)
+                    .eq("yuman_material_id", e_new.yuman_material_id)
+                    .execute()
+                )
+                updated = bool(res.data)
+
+            if not updated:
+                logger.error("[SB] UPDATE 0 row: serial=%s mid=%s vcom=%s",
+                            serial_new, e_new.yuman_material_id, e_new.vcom_system_key)
+            else:
+                logger.debug("[SB] UPDATE OK: serial=%s mid=%s", serial_new, e_new.yuman_material_id)
 
         # ---------- DELETE (flag obsolète) ----------
         if patch.delete:
-            dev_ids = [e.vcom_device_id for e in patch.delete]
-            res = (
-                self.sb.table(EQUIP_TABLE)
-                .update({"is_obsolete": True, "obsolete_at": now_iso})
-                .in_("vcom_device_id", dev_ids)
-                .execute()
-            )
-            logger.debug("[SB] FLAG obsolete %d equips → %s", len(dev_ids), res.data)
+            # priorité au serial si présent
+            serials = [_norm_serial(e.serial_number) for e in patch.delete if _norm_serial(e.serial_number)]
+            vcom_ids = [e.vcom_device_id for e in patch.delete if not _norm_serial(e.serial_number) and e.vcom_device_id]
+
+            if serials:
+                res = (
+                    self.sb.table(EQUIP_TABLE)
+                    .update({"is_obsolete": True, "obsolete_at": now_iso})
+                    .in_("serial_number", serials)
+                    .execute()
+                )
+                logger.debug("[SB] FLAG obsolete by serial %d equips → %s", len(serials), res.data)
+
+            if vcom_ids:
+                res = (
+                    self.sb.table(EQUIP_TABLE)
+                    .update({"is_obsolete": True, "obsolete_at": now_iso})
+                    .in_("vcom_device_id", vcom_ids)
+                    .execute()
+                )
+                logger.debug("[SB] FLAG obsolete by vcom_id %d equips → %s", len(vcom_ids), res.data)
 
 
 
@@ -386,73 +432,111 @@ class SupabaseAdapter:
             "parent_id", "is_obsolete", "obsolete_at", "count",
             "vcom_system_key", "eq_type", "vcom_device_id",
             "serial_number", "brand", "model", "name", "site_id",
-            "created_at", "extra", "yuman_material_id", "category_id","yuman_site_id"
-            # champs custom : si besoin, décommente
-            # "mppt_idx", "module_brand", "module_model",
+            "created_at", "extra", "yuman_material_id", "category_id", "yuman_site_id"
         }
         now_iso = datetime.now(timezone.utc).isoformat()
 
-        # --------------------- ADD / UPSERT ------------------------
-        dedup: dict[str, dict] = {}          # vcom_device_id → row unique
+        # --------------------- ADD / UPSERT (idempotent) ---------------------
+        upserts = []
+        seen_serials: set[str] = set()
 
         for e in patch.add:
+            # resolve site
             sid = e.site_id or self._site_id_by_yuman(e.yuman_site_id)
             if sid is None:
-                logger.error("[SB] site Yuman %s introuvable → skip %s",
+                logger.error("[SB] site Yuman %s introuvable → skip ADD (mid=%s)",
                             e.yuman_site_id, e.yuman_material_id)
                 continue
 
             row = {k: v for k, v in e.to_dict().items() if k in VALID}
-            row["site_id"] = sid
-            row.setdefault("created_at", now_iso)
+            # normaliser serial
+            row["serial_number"] = _norm_serial(row.get("serial_number"))
 
-            dedup.setdefault(row["vcom_device_id"], row)
-
-        if dedup:
-            res = (
-                self.sb.table(TABLE)
-                .upsert(
-                    list(dedup.values()),
-                    on_conflict=["vcom_device_id", "yuman_material_id"],      # contrainte unique
-                    ignore_duplicates=True
-                )
-                .execute()
-            )
-            logger.debug("[SB] UPSERT %d equipsMapping → %s",
-                        len(dedup), res.data)
-
-        # ----------------------- UPDATE ---------------------------
-        for old, e in patch.update:
-            # 1) Résolution du site
-            sid = e.site_id or self._site_id_by_yuman(e.yuman_site_id)
-            if sid is None:
+            if not row["serial_number"]:
+                logger.error("[SB] SKIP ADD (serial vide) cat=%s vcom=%s mid=%s",
+                            row.get("category_id"), row.get("vcom_system_key"),
+                            row.get("yuman_material_id"))
                 continue
 
-            # 2) Construction du payload : on exclut les None, et les clés d'identification
-            payload = {
-                k: v
-                for k, v in e.to_dict().items()
-                if v is not None
-                and k in VALID
-                and k not in {"vcom_device_id", "yuman_material_id", "vcom_system_key"}
-            }
-            # on remet site_id à jour
-            payload["site_id"] = sid
+            # dédoublonner au sein du batch par serial
+            if row["serial_number"] in seen_serials:
+                logger.warning("[SB] SKIP ADD (doublon batch) serial=%s", row["serial_number"])
+                continue
+            seen_serials.add(row["serial_number"])
 
-            # si payload vide, on skip
+            row["site_id"] = sid
+            row.setdefault("created_at", now_iso)
+            row["name"] = row.get("name") or row.get("vcom_device_id")
+
+            upserts.append(row)
+
+        if upserts:
+            # IMPORTANT :
+            # - on_conflict sur 'serial_number' (aligne avec uq_equips_serial)
+            # - PAS de ignore_duplicates → DO UPDATE (et pas DO NOTHING)
+            res = (
+                self.sb.table(TABLE)
+                .upsert(upserts, on_conflict="serial_number")
+                .execute()
+            )
+            logger.debug("[SB] UPSERT %d equipsMapping (key=serial_number) → %s",
+                        len(upserts), res.data)
+
+        # -------------------------- UPDATE --------------------------
+        for old, e in patch.update:
+            # resolve site
+            sid = e.site_id or self._site_id_by_yuman(e.yuman_site_id)
+            # si non résolu, on n'écrase pas site_id plutôt que skip total
+            payload = {
+                k: v for k, v in e.to_dict().items()
+                if v is not None and k in VALID and k not in {"vcom_device_id", "yuman_material_id", "vcom_system_key"}
+            }
+            if sid is not None:
+                payload["site_id"] = sid
+
             if not payload:
                 continue
 
-            # 3) Construction de la requête : on utilise vcom_device_id si dispo,
-            #    sinon yuman_material_id comme filtre
-            query = self.sb.table(TABLE).update(payload)
-            if e.vcom_device_id:
-                query = query.eq("vcom_device_id", e.vcom_device_id)
-                ident = f"vcom_device_id = {e.vcom_device_id}"
-            else:
-                query = query.eq("yuman_material_id", e.yuman_material_id)
-                ident = f"yuman_material_id = {e.yuman_material_id}"
+            # normaliser serial dans le payload si présent
+            if "serial_number" in payload:
+                payload["serial_number"] = _norm_serial(payload["serial_number"])
 
-            # 4) Exécution
-            res = query.execute()
-            logger.debug(f"[SB] UPDATE ({ident}) → {res.data}")
+            serial_new = _norm_serial(e.serial_number)
+
+            # 1) UPDATE par serial (voie royale)
+            updated = False
+            if serial_new:
+                res = (
+                    self.sb.table(TABLE)
+                    .update(payload)
+                    .eq("serial_number", serial_new)
+                    .execute()
+                )
+                # Supabase renvoie [] si 0 ligne, sinon la/les lignes modifiées
+                updated = bool(res.data)
+
+            # 2) Fallback par yuman_material_id
+            if not updated and e.yuman_material_id is not None:
+                res = (
+                    self.sb.table(TABLE)
+                    .update(payload)
+                    .eq("yuman_material_id", e.yuman_material_id)
+                    .execute()
+                )
+                updated = bool(res.data)
+
+            # 3) Dernier recours : vcom_device_id
+            if not updated and e.vcom_device_id:
+                res = (
+                    self.sb.table(TABLE)
+                    .update(payload)
+                    .eq("vcom_device_id", e.vcom_device_id)
+                    .execute()
+                )
+                updated = bool(res.data)
+
+            if not updated:
+                logger.error("[SB] UPDATE 0 row: serial=%s mid=%s vcom=%s",
+                            serial_new, e.yuman_material_id, e.vcom_system_key)
+            else:
+                logger.debug("[SB] UPDATE OK: serial=%s mid=%s", serial_new, e.yuman_material_id)

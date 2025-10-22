@@ -123,6 +123,7 @@ def main() -> None:
     #3) on génère des patchs « fill missing » (pas de supprimer)
     patch_clients = diff_fill_missing(db_clients,     {c["id"]: c for c in y_clients})
     patch_maps_sites  = diff_fill_missing(db_maps_sites,  y_sites, fields=["yuman_site_id","code", "client_map_id", "name",  "aldi_id","aldi_store_id","project_number_cp","commission_date","nominal_power"])
+
     patch_maps_equips = diff_fill_missing(db_maps_equips, y_equips, fields=["category_id","eq_type", "name", "yuman_material_id",
                                                                           "serial_number","brand","model","count","parent_id", "yuman_site_id"])
 
@@ -144,6 +145,101 @@ def main() -> None:
         len(patch_maps_equips.update),
         len(patch_maps_equips.delete),
     )
+
+    # ───────── Helpers ─────────
+    from vysync.diff import PatchSet
+
+    def _norm_serial(s: str | None) -> str:
+        return (s or "").strip().upper()
+
+    # ───────── Index DB / Cible (avant diff) ─────────
+    db_by_serial  = { _norm_serial(e.serial_number): e for e in db_maps_equips.values() if e.serial_number is not None }
+    tgt_by_serial = { _norm_serial(e.serial_number): e for e in y_equips.values()       if e.serial_number is not None }
+
+    db_by_mid: dict[int, any] = {}
+    for e in db_maps_equips.values():
+        mid = getattr(e, "yuman_material_id", None)
+        if mid is not None:
+            db_by_mid[mid] = e
+
+    # ───────── Audit ensembliste ─────────
+    keys_db  = set(db_by_serial.keys())
+    keys_tgt = set(tgt_by_serial.keys())
+    only_in_tgt = sorted(keys_tgt - keys_db)
+    only_in_db  = sorted(keys_db  - keys_tgt)
+    logger.info("AUDIT pre-diff: only_in_tgt=%d | only_in_db=%d", len(only_in_tgt), len(only_in_db))
+
+    # ───────── Audit des ADD issus du diff_fill_missing ─────────
+    logger.info(
+        "AUDIT patch EquipsMapping: +%d ~%d -%d",
+        len(patch_maps_equips.add),
+        len(patch_maps_equips.update),
+        len(patch_maps_equips.delete),
+    )
+
+    for e in patch_maps_equips.add:
+        sk  = _norm_serial(e.serial_number)
+        mid = getattr(e, "yuman_material_id", None)
+        in_db_by_serial = sk in db_by_serial
+        in_db_by_mid    = (mid is not None) and (mid in db_by_mid)
+        logger.warning(
+            "[ADD] serial=%r | key_norm=%r | mid=%r | cat=%s | vcom=%s | inDB_bySerial=%s | inDB_byMID=%s",
+            e.serial_number, sk, mid, getattr(e, "category_id", None), getattr(e, "vcom_system_key", None),
+            in_db_by_serial, in_db_by_mid
+        )
+        if in_db_by_mid:
+            logger.warning("  → DIAG: même yuman_material_id déjà en DB → devrait être un UPDATE, pas un ADD.")
+        elif in_db_by_serial:
+            logger.warning("  → DIAG: serial présent en DB mais non matché par le diff (clé/normalisation).")
+
+    # ───────── Requalification des ADD → UPDATE (serial / mid) + dédoublonnage ─────────
+    safe_add:  list = []
+    force_upd: list = []
+    seen_serials: set[str] = set()
+
+    for e in patch_maps_equips.add:
+        s   = _norm_serial(e.serial_number)
+        mid = getattr(e, "yuman_material_id", None)
+
+        # 1) bannir serial vide
+        if not s:
+            logger.error("[SB] SKIP ADD (serial vide) cat=%s vcom=%s mid=%s", e.category_id, e.vcom_system_key, mid)
+            continue
+
+        # 2) dédoublonner à l'intérieur du patch.add
+        if s in seen_serials:
+            logger.warning("[SB] SKIP ADD (doublon dans patch) serial=%s", s)
+            continue
+        seen_serials.add(s)
+
+        # 3) requalifier si déjà présent par yuman_material_id
+        if mid is not None and mid in db_by_mid:
+            force_upd.append((db_by_mid[mid], e))
+            continue
+
+        # 4) requalifier si déjà présent par serial
+        if s in db_by_serial:
+            force_upd.append((db_by_serial[s], e))
+            continue
+
+        # 5) sinon, vrai ADD
+        safe_add.append(e)
+
+    # éviter de pousser en UPDATE deux fois le même serial (si le diff avait déjà mis un UPDATE)
+    serials_already_upd = { _norm_serial(ne.serial_number) for _, ne in patch_maps_equips.update }
+    force_upd = [ (old, ne) for (old, ne) in force_upd if _norm_serial(ne.serial_number) not in serials_already_upd ]
+
+    patch_maps_equips = PatchSet(
+        add=safe_add,
+        update=patch_maps_equips.update + force_upd,
+        delete=patch_maps_equips.delete
+    )
+
+    logger.info(
+        "[SB] After requalify: ADD=%d, UPDATE=%d, DELETE=%d",
+        len(patch_maps_equips.add), len(patch_maps_equips.update), len(patch_maps_equips.delete)
+    )
+
     while input("Écrivez 'oui' pour continuer : ").strip().lower() != "oui":
         pass
 
