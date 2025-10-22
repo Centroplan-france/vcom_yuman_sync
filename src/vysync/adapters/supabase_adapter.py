@@ -158,7 +158,7 @@ class SupabaseAdapter:
                 or []
             )
             for r in page:
-                equips[r["vcom_device_id"]] = Equipment(
+                equips[r.get("serial_number")] = Equipment(
                     vcom_system_key=r["vcom_system_key"],
                     category_id=r["category_id"],
                     eq_type=r["eq_type"],
