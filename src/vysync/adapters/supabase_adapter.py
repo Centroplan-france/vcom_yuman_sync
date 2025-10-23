@@ -77,10 +77,34 @@ class SupabaseAdapter:
         return self._map_vcom_to_id.get(vcom_key)
 
     def _site_id_by_yuman(self, yuman_site_id: int | None) -> int | None:
-        """Retourne l’ID Supabase via yuman_site_id."""
+        """Retourne l'ID Supabase via yuman_site_id."""
         if yuman_site_id is None:
             return None
         return self._map_yid_to_id.get(yuman_site_id)
+
+    def _enrich_equipment_with_site_keys(self, equipment: Equipment) -> Equipment:
+        """Reconstruit vcom_system_key et yuman_site_id depuis site_id via le cache."""
+        if equipment.site_id is None:
+            return equipment
+
+        # Trouver le site correspondant
+        vcom_key = None
+        yuman_id = None
+        for key, sid in self._map_vcom_to_id.items():
+            if sid == equipment.site_id:
+                vcom_key = key
+                break
+        for yid, sid in self._map_yid_to_id.items():
+            if sid == equipment.site_id:
+                yuman_id = yid
+                break
+
+        # Reconstruire l'objet avec les clés
+        return Equipment(
+            **{**equipment.to_dict(),
+               "vcom_system_key": vcom_key,
+               "yuman_site_id": yuman_id}
+        )
 
 
 
@@ -149,7 +173,9 @@ class SupabaseAdapter:
 
             # 2. Ajoute le filtre site si demandé
             if site_key:
-                query = query.eq("vcom_system_key", site_key)
+                site_id = self._site_id(site_key)
+                if site_id:
+                    query = query.eq("site_id", site_id)
 
             # 3. Paginate
             page = (
@@ -160,8 +186,8 @@ class SupabaseAdapter:
                 or []
             )
             for r in page:
-                equips[r.get("serial_number")] = Equipment(
-                    vcom_system_key=r["vcom_system_key"],
+                base_eq = Equipment(
+                    site_id=r["site_id"],
                     category_id=r["category_id"],
                     eq_type=r["eq_type"],
                     vcom_device_id=r["vcom_device_id"],
@@ -172,8 +198,8 @@ class SupabaseAdapter:
                     count=r.get("count"),
                     parent_id=r.get("parent_id"),
                     yuman_material_id=r.get("yuman_material_id"),
-                    
                 )
+                equips[r.get("serial_number")] = self._enrich_equipment_with_site_keys(base_eq)
             if len(page) < step:
                 break        # dernière page atteinte
             from_row += step
@@ -193,8 +219,8 @@ class SupabaseAdapter:
                 .data or []
             )
             for r in page:
-                equips[r["serial_number"]] = Equipment(
-                    vcom_system_key=r["vcom_system_key"],
+                base_eq = Equipment(
+                    site_id=r["site_id"],
                     category_id=r["category_id"],
                     eq_type=r["eq_type"],
                     vcom_device_id=r["vcom_device_id"],
@@ -205,8 +231,8 @@ class SupabaseAdapter:
                     count=r.get("count"),
                     parent_id=r.get("parent_id"),
                     yuman_material_id=r.get("yuman_material_id"),
-                    yuman_site_id=r.get("yuman_site_id"),
                 )
+                equips[r["serial_number"]] = self._enrich_equipment_with_site_keys(base_eq)
             if len(page) < step:
                 break        # dernière page atteinte
             from_row += step
@@ -251,9 +277,9 @@ class SupabaseAdapter:
     def apply_equips_patch(self, patch) -> None:
         VALID_COLS = {
             "parent_id", "is_obsolete", "obsolete_at", "count",
-            "vcom_system_key", "eq_type", "vcom_device_id",
+            "eq_type", "vcom_device_id",
             "serial_number", "brand", "model", "name", "site_id",
-            "created_at", "extra", "yuman_material_id", "category_id", "yuman_site_id"
+            "created_at", "extra", "yuman_material_id", "category_id"
         }
         now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -267,13 +293,12 @@ class SupabaseAdapter:
                                 e.vcom_system_key, e.vcom_device_id)
                     continue
 
-                row = e.to_dict()
+                row = e.to_db_dict()
                 # normalisation serial
                 row["serial_number"] = _norm_serial(row.get("serial_number"))
                 if not row["serial_number"]:
                     logger.error("[SB] ADD SKIPPED (serial vide) cat=%s vcom=%s mid=%s",
-                                row.get("category_id"), row.get("vcom_system_key"),
-                                row.get("yuman_material_id"))
+                                e.category_id, e.vcom_system_key, e.yuman_material_id)
                     continue
 
                 row.update(
@@ -297,8 +322,8 @@ class SupabaseAdapter:
             e_new = item[1] if isinstance(item, tuple) else item
 
             payload = {
-                k: v for k, v in e_new.to_dict().items()
-                if v is not None and k in VALID_COLS and k not in {"vcom_device_id", "vcom_system_key"}
+                k: v for k, v in e_new.to_db_dict().items()
+                if v is not None and k in VALID_COLS and k not in {"vcom_device_id", "vcom_system_key", "yuman_site_id"}
             }
             if not payload:
                 continue
@@ -430,9 +455,9 @@ class SupabaseAdapter:
         TABLE = "equipments_mapping"
         VALID = {
             "parent_id", "is_obsolete", "obsolete_at", "count",
-            "vcom_system_key", "eq_type", "vcom_device_id",
+            "eq_type", "vcom_device_id",
             "serial_number", "brand", "model", "name", "site_id",
-            "created_at", "extra", "yuman_material_id", "category_id", "yuman_site_id"
+            "created_at", "extra", "yuman_material_id", "category_id"
         }
         now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -448,14 +473,13 @@ class SupabaseAdapter:
                             e.yuman_site_id, e.yuman_material_id)
                 continue
 
-            row = {k: v for k, v in e.to_dict().items() if k in VALID}
+            row = {k: v for k, v in e.to_db_dict().items() if k in VALID}
             # normaliser serial
             row["serial_number"] = _norm_serial(row.get("serial_number"))
 
             if not row["serial_number"]:
                 logger.error("[SB] SKIP ADD (serial vide) cat=%s vcom=%s mid=%s",
-                            row.get("category_id"), row.get("vcom_system_key"),
-                            row.get("yuman_material_id"))
+                            e.category_id, e.vcom_system_key, e.yuman_material_id)
                 continue
 
             # dédoublonner au sein du batch par serial
@@ -488,8 +512,8 @@ class SupabaseAdapter:
             sid = e.site_id or self._site_id_by_yuman(e.yuman_site_id)
             # si non résolu, on n'écrase pas site_id plutôt que skip total
             payload = {
-                k: v for k, v in e.to_dict().items()
-                if v is not None and k in VALID and k not in {"vcom_device_id", "yuman_material_id", "vcom_system_key"}
+                k: v for k, v in e.to_db_dict().items()
+                if v is not None and k in VALID and k not in {"vcom_device_id", "yuman_material_id", "vcom_system_key", "yuman_site_id"}
             }
             if sid is not None:
                 payload["site_id"] = sid
