@@ -177,7 +177,7 @@ def _merge_sites(sb, yc: YumanClient,
     }).execute()
 
     # 1) récupérer l'ID Yuman résultant (ici old_yid)
-    yuman_id = y_row["id"]     
+    yuman_id = y_row["yuman_site_id"]     
     vcom_key = v_row["vcom_system_key"]
 
     # 2) appeler l'API Yuman pour renseigner le champ personnalisé
