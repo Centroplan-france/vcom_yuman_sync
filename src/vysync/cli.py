@@ -33,8 +33,9 @@ logger.setLevel(logging.DEBUG)
 
 # ──────────────────────────── Main ─────────────────────────────
 def main() -> None:
-    # Forcer le niveau de log à DEBUG
-    logging.basicConfig(level=logging.DEBUG, force=True)
+    # Configuration du logging
+    from vysync.logging_config import setup_logging
+    setup_logging()
 
     # -----------------------------------------------------------
     # CLI arguments
@@ -327,6 +328,14 @@ def main() -> None:
     )
 
     logger.info("✅ Synchronisation terminée")
+
+    # Résumé des logs
+    logger.info("=" * 60)
+    logger.info("Exécution terminée")
+    logger.info("Consultez les fichiers de logs pour plus de détails :")
+    logger.info("  - logs/debug_*.log : logs complets (DEBUG)")
+    logger.info("  - logs/updates_*.log : détails des updates d'équipements")
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":
