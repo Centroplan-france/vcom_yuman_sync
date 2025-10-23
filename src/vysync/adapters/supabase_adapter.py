@@ -319,6 +319,7 @@ class SupabaseAdapter:
 
         # ---------- UPDATE ----------
         for item in patch.update:
+            e_old = item[0] if isinstance(item, tuple) else None
             e_new = item[1] if isinstance(item, tuple) else item
 
             payload = {
@@ -326,6 +327,8 @@ class SupabaseAdapter:
                 if v is not None and k in VALID_COLS and k not in {"vcom_device_id", "vcom_system_key", "yuman_site_id"}
             }
             if not payload:
+                logger.warning("[SB] UPDATE SKIPPED (payload vide): serial=%s mid=%s",
+                              e_new.serial_number, e_new.yuman_material_id)
                 continue
 
             # normaliser serial côté payload
@@ -337,20 +340,32 @@ class SupabaseAdapter:
             if site_id is not None:
                 payload["site_id"] = site_id
 
-            # UPDATE par serial d’abord
+            # LOG des changements détectés
+            if e_old:
+                changes = {k: (getattr(e_old, k, None), v) for k, v in payload.items()
+                           if getattr(e_old, k, None) != v}
+                if changes:
+                    logger.info("[SB] UPDATE detected changes for serial=%s: %s",
+                               e_new.serial_number, changes)
+
+            # UPDATE par serial d'abord
             serial_new = _norm_serial(e_new.serial_number)
             updated = False
             if serial_new:
+                logger.debug("[SB] Attempting UPDATE by serial=%s with payload=%s", serial_new, payload)
                 res = (
                     self.sb.table(EQUIP_TABLE)
                     .update(payload)
                     .eq("serial_number", serial_new)
                     .execute()
                 )
-                updated = bool(res.data)  # Supabase renvoie [] si 0 ligne
+                updated = bool(res.data)
+                if updated:
+                    logger.info("[SB] UPDATE OK by serial=%s: %d row(s) affected", serial_new, len(res.data))
 
             # Fallback par yuman_material_id si 0 ligne touchée
             if not updated and e_new.yuman_material_id is not None:
+                logger.debug("[SB] Fallback UPDATE by yuman_material_id=%s", e_new.yuman_material_id)
                 res = (
                     self.sb.table(EQUIP_TABLE)
                     .update(payload)
@@ -358,12 +373,13 @@ class SupabaseAdapter:
                     .execute()
                 )
                 updated = bool(res.data)
+                if updated:
+                    logger.info("[SB] UPDATE OK by yuman_material_id=%s: %d row(s) affected",
+                               e_new.yuman_material_id, len(res.data))
 
             if not updated:
-                logger.error("[SB] UPDATE 0 row: serial=%s mid=%s vcom=%s",
-                            serial_new, e_new.yuman_material_id, e_new.vcom_system_key)
-            else:
-                logger.debug("[SB] UPDATE OK: serial=%s mid=%s", serial_new, e_new.yuman_material_id)
+                logger.error("[SB] UPDATE 0 row: serial=%s mid=%s vcom=%s payload=%s",
+                            serial_new, e_new.yuman_material_id, e_new.vcom_system_key, payload)
 
         # ---------- DELETE (flag obsolète) ----------
         if patch.delete:
@@ -519,17 +535,28 @@ class SupabaseAdapter:
                 payload["site_id"] = sid
 
             if not payload:
+                logger.warning("[SB] UPDATE SKIPPED (payload vide): serial=%s mid=%s",
+                              e.serial_number, e.yuman_material_id)
                 continue
 
             # normaliser serial dans le payload si présent
             if "serial_number" in payload:
                 payload["serial_number"] = _norm_serial(payload["serial_number"])
 
+            # LOG des changements détectés
+            if old:
+                changes = {k: (getattr(old, k, None), v) for k, v in payload.items()
+                           if getattr(old, k, None) != v}
+                if changes:
+                    logger.info("[SB] UPDATE detected changes for serial=%s: %s",
+                               e.serial_number, changes)
+
             serial_new = _norm_serial(e.serial_number)
 
             # 1) UPDATE par serial (voie royale)
             updated = False
             if serial_new:
+                logger.debug("[SB] Attempting UPDATE by serial=%s with payload=%s", serial_new, payload)
                 res = (
                     self.sb.table(TABLE)
                     .update(payload)
@@ -538,9 +565,12 @@ class SupabaseAdapter:
                 )
                 # Supabase renvoie [] si 0 ligne, sinon la/les lignes modifiées
                 updated = bool(res.data)
+                if updated:
+                    logger.info("[SB] UPDATE OK by serial=%s: %d row(s) affected", serial_new, len(res.data))
 
             # 2) Fallback par yuman_material_id
             if not updated and e.yuman_material_id is not None:
+                logger.debug("[SB] Fallback UPDATE by yuman_material_id=%s", e.yuman_material_id)
                 res = (
                     self.sb.table(TABLE)
                     .update(payload)
@@ -548,9 +578,13 @@ class SupabaseAdapter:
                     .execute()
                 )
                 updated = bool(res.data)
+                if updated:
+                    logger.info("[SB] UPDATE OK by yuman_material_id=%s: %d row(s) affected",
+                               e.yuman_material_id, len(res.data))
 
             # 3) Dernier recours : vcom_device_id
             if not updated and e.vcom_device_id:
+                logger.debug("[SB] Fallback UPDATE by vcom_device_id=%s", e.vcom_device_id)
                 res = (
                     self.sb.table(TABLE)
                     .update(payload)
@@ -558,9 +592,10 @@ class SupabaseAdapter:
                     .execute()
                 )
                 updated = bool(res.data)
+                if updated:
+                    logger.info("[SB] UPDATE OK by vcom_device_id=%s: %d row(s) affected",
+                               e.vcom_device_id, len(res.data))
 
             if not updated:
-                logger.error("[SB] UPDATE 0 row: serial=%s mid=%s vcom=%s",
-                            serial_new, e.yuman_material_id, e.vcom_system_key)
-            else:
-                logger.debug("[SB] UPDATE OK: serial=%s mid=%s", serial_new, e.yuman_material_id)
+                logger.error("[SB] UPDATE 0 row: serial=%s mid=%s vcom=%s payload=%s",
+                            serial_new, e.yuman_material_id, e.vcom_system_key, payload)
