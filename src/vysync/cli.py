@@ -125,7 +125,7 @@ def main() -> None:
     patch_maps_sites  = diff_fill_missing(db_maps_sites,  y_sites, fields=["yuman_site_id","code", "client_map_id", "name",  "aldi_id","aldi_store_id","project_number_cp","commission_date","nominal_power"])
 
     patch_maps_equips = diff_fill_missing(db_maps_equips, y_equips, fields=["category_id","eq_type", "name", "yuman_material_id",
-                                                                          "serial_number","brand","model","count","parent_id", "yuman_site_id"])
+                                                                          "serial_number","brand","model","count","parent_id"])
 
     logger.info(
         "[YUMAN→DB] Clients Δ +%d  ~%d  -%d",

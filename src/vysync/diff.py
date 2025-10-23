@@ -227,7 +227,7 @@ def diff_fill_missing(
     # 1) paramètres
     to_check_base = fields or [
         "brand", "model", "serial_number", "count",
-        "mppt_idx", "module_brand", "module_model", "yuman_site_id"
+        "mppt_idx", "module_brand", "module_model"
     ]
     skip_cats = set(skip_categories or [])
     excl_map  = category_field_exclusions or {}
