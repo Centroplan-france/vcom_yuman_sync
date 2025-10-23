@@ -176,12 +176,12 @@ def _merge_sites(sb, yc: YumanClient,
         "yuman_id": y_row["id"],
     }).execute()
 
-    # 1) récupérer l'ID Yuman résultant (ici old_yid)
-    yuman_id = y_row["yuman_site_id"]     
+    # 1) récupérer l'ID Yuman externe (pour l'API Yuman)
+    yuman_site_id = y_row["yuman_site_id"]  # ID externe Yuman (pas l'ID Supabase interne)
     vcom_key = v_row["vcom_system_key"]
 
     # 2) appeler l'API Yuman pour renseigner le champ personnalisé
-    yc.update_site(yuman_id, {"fields": [
+    yc.update_site(yuman_site_id, {"fields": [
     {"blueprint_id": 13583, "name": "System Key (Vcom ID)", "value": vcom_key}]})
 
     # 6) Marquer le conflit résolu
