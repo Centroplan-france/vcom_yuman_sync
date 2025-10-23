@@ -33,6 +33,9 @@ logger.setLevel(logging.DEBUG)
 
 # ──────────────────────────── Main ─────────────────────────────
 def main() -> None:
+    # Forcer le niveau de log à DEBUG
+    logging.basicConfig(level=logging.DEBUG, force=True)
+
     # -----------------------------------------------------------
     # CLI arguments
     # -----------------------------------------------------------
@@ -247,7 +250,19 @@ def main() -> None:
     #4) on ré‑utilise les mêmes apply_*_patch de SupabaseAdapter
     sb.apply_clients_mapping_patch(patch_clients)
     sb.apply_sites_patch(patch_maps_sites)
-    sb.apply_equips_mapping_patch(patch_maps_equips) 
+    sb.apply_equips_mapping_patch(patch_maps_equips)
+
+    logger.info("[YUMAN→DB] EquipsMapping patch applied: +%d ~%d -%d",
+               len(patch_maps_equips.add),
+               len(patch_maps_equips.update),
+               len(patch_maps_equips.delete))
+
+    # Log des 5 premiers updates pour debug
+    if patch_maps_equips.update:
+        logger.info("[DEBUG] Sample of first 5 updates:")
+        for i, (old, new) in enumerate(list(patch_maps_equips.update)[:5]):
+            logger.info("  [%d] serial=%s: old=%s new=%s",
+                       i+1, new.serial_number, old.to_dict(), new.to_dict())
 
     # # -----------------------------------------------------------
     # # PHASE 1 C – Résolution manuelle des conflits de sites
