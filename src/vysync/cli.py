@@ -65,43 +65,43 @@ def main() -> None:
     # -----------------------------------------------------------
     # PHASE 1 A – VCOM → Supabase
     # -----------------------------------------------------------
-    # db_sites   = sb.fetch_sites_v(site_key=site_key)
-    # db_equips  = sb.fetch_equipments_v(site_key=site_key)
-    # known_sys  = set(db_sites.keys())
+    db_sites   = sb.fetch_sites_v(site_key=site_key)
+    db_equips  = sb.fetch_equipments_v(site_key=site_key)
+    known_sys  = set(db_sites.keys())
 
-    # # snapshot VCOM
-    # v_sites, v_equips = fetch_snapshot(vc, vcom_system_key=site_key, skip_keys=None if maj_all or site_key else known_sys,    )
-    # if site_key:
-    #     v_sites  = {k: s for k, s in v_sites.items() if k == site_key}
-    #     v_equips = {k: e for k, e in v_equips.items() if e.vcom_system_key == site_key}
+    # snapshot VCOM
+    v_sites, v_equips = fetch_snapshot(vc, vcom_system_key=site_key, skip_keys=None if maj_all or site_key else known_sys,    )
+    if site_key:
+        v_sites  = {k: s for k, s in v_sites.items() if k == site_key}
+        v_equips = {k: e for k, e in v_equips.items() if e.vcom_system_key == site_key}
 
-    # # filtrage incrémental
-    # if not maj_all and not site_key:
-    #     seen = set(v_sites)
-    #     db_sites  = {k: s for k, s in db_sites.items()  if k in seen}
-    #     db_equips = {k: e for k, e in db_equips.items() if e.vcom_system_key in seen}
+    # filtrage incrémental
+    if not maj_all and not site_key:
+        seen = set(v_sites)
+        db_sites  = {k: s for k, s in db_sites.items()  if k in seen}
+        db_equips = {k: e for k, e in db_equips.items() if e.vcom_system_key in seen}
 
-    # # diff & patch
-    # patch_sites = diff_entities(db_sites, v_sites, ignore_fields={"yuman_site_id", "client_map_id", "code", "ignore_site"})
-    # patch_equips = diff_entities(db_equips, v_equips, ignore_fields={"yuman_material_id", "parent_id"})
+    # diff & patch
+    patch_sites = diff_entities(db_sites, v_sites, ignore_fields={"yuman_site_id", "client_map_id", "code", "ignore_site"})
+    patch_equips = diff_entities(db_equips, v_equips, ignore_fields={"yuman_material_id", "parent_id"})
 
-    # logger.info(
-    #     "[VCOM→DB] Sites  Δ  +%d  ~%d  -%d",
-    #     len(patch_sites.add),
-    #     len(patch_sites.update),
-    #     len(patch_sites.delete),
-    # )
-    # logger.info(
-    #     "[VCOM→DB] Equips Δ  +%d  ~%d  -%d",
-    #     len(patch_equips.add),
-    #     len(patch_equips.update),
-    #     len(patch_equips.delete),
-    # )
-    # while input("Écrivez 'oui' pour continuer : ").strip().lower() != "oui":
-    #     pass
+    logger.info(
+        "[VCOM→DB] Sites  Δ  +%d  ~%d  -%d",
+        len(patch_sites.add),
+        len(patch_sites.update),
+        len(patch_sites.delete),
+    )
+    logger.info(
+        "[VCOM→DB] Equips Δ  +%d  ~%d  -%d",
+        len(patch_equips.add),
+        len(patch_equips.update),
+        len(patch_equips.delete),
+    )
+    while input("Écrivez 'oui' pour continuer : ").strip().lower() != "oui":
+        pass
 
-    # sb.apply_sites_patch(patch_sites)
-    # sb.apply_equips_patch(patch_equips)
+    sb.apply_sites_patch(patch_sites)
+    sb.apply_equips_patch(patch_equips)
 
     # -----------------------------------------------------------
     # PHASE 1 B – YUMAN → Supabase (mapping)
@@ -286,45 +286,45 @@ def main() -> None:
                 if not (getattr(s, "ignore_site", False) and getattr(s, "yuman_site_id", None) is None)
             }
 
-    # # -----------------------------------------------------------
-    # # PHASE 2 – Supabase ➜ Yuman  (diff + patch SANS refetch)
-    # # -----------------------------------------------------------
-    # logger.info("[DB→YUMAN] Synchronisation des sites…")
-    # patch_s = diff_entities(y_sites, sb_sites, ignore_fields={"client_map_id", "id", "ignore_site"})
-    # logger.info(
-    #     "[DB→YUMAN] Sites Δ  +%d  ~%d  -%d",
-    #     len(patch_s.add),
-    #     len(patch_s.update),
-    #     len(patch_s.delete),
-    # )
-    # y.apply_sites_patch(
-    #     db_sites=sb_sites,
-    #     y_sites=y_sites,
-    #     patch=patch_s,
-    # )
+    # -----------------------------------------------------------
+    # PHASE 2 – Supabase ➜ Yuman  (diff + patch SANS refetch)
+    # -----------------------------------------------------------
+    logger.info("[DB→YUMAN] Synchronisation des sites…")
+    patch_s = diff_entities(y_sites, sb_sites, ignore_fields={"client_map_id", "id", "ignore_site"})
+    logger.info(
+        "[DB→YUMAN] Sites Δ  +%d  ~%d  -%d",
+        len(patch_s.add),
+        len(patch_s.update),
+        len(patch_s.delete),
+    )
+    y.apply_sites_patch(
+        db_sites=sb_sites,
+        y_sites=y_sites,
+        patch=patch_s,
+    )
 
 
-    # logger.info("[DB→YUMAN] Synchronisation des équipements…")
+    logger.info("[DB→YUMAN] Synchronisation des équipements…")
 
-    # # 1) mapping parent : vcom_device_id → yuman_material_id
-    # id_by_vcom = {
-    #     e.vcom_device_id: e.yuman_material_id
-    #     for e in y_equips.values()
-    #     if e.yuman_material_id
-    # }
-    # set_parent_map(id_by_vcom)
-    # patch_e = diff_entities(y_equips, sb_equips, ignore_fields={"vcom_system_key", "yuman_site_id", "parent_id"})
-    # logger.info(
-    #     "[DB→YUMAN] Equips Δ  +%d  ~%d  -%d",
-    #     len(patch_e.add),
-    #     len(patch_e.update),
-    #     len(patch_e.delete),
-    # )
-    # y.apply_equips_patch(
-    #     db_equips=sb_equips,
-    #     y_equips=y_equips,
-    #     patch=patch_e,
-    # )
+    # 1) mapping parent : vcom_device_id → yuman_material_id
+    id_by_vcom = {
+        e.vcom_device_id: e.yuman_material_id
+        for e in y_equips.values()
+        if e.yuman_material_id
+    }
+    set_parent_map(id_by_vcom)
+    patch_e = diff_entities(y_equips, sb_equips, ignore_fields={"vcom_system_key", "yuman_site_id", "parent_id"})
+    logger.info(
+        "[DB→YUMAN] Equips Δ  +%d  ~%d  -%d",
+        len(patch_e.add),
+        len(patch_e.update),
+        len(patch_e.delete),
+    )
+    y.apply_equips_patch(
+        db_equips=sb_equips,
+        y_equips=y_equips,
+        patch=patch_e,
+    )
 
     logger.info("✅ Synchronisation terminée")
 
