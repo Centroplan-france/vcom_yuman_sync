@@ -60,7 +60,15 @@ class Equipment:
 
     # --- sérialisation -----------------------------------
     def to_dict(self) -> Dict[str, Any]:
+        """Sérialisation complète pour usage métier (logs, diffs, comparaisons)."""
         return asdict(self)
+
+    def to_db_dict(self) -> Dict[str, Any]:
+        """Sérialisation pour persistance Supabase (exclut les colonnes supprimées)."""
+        d = asdict(self)
+        d.pop("vcom_system_key", None)
+        d.pop("yuman_site_id", None)
+        return d
 
     # --- égalité (cohérente avec la doc-string) ---------- ②
     def __eq__(self, other: object) -> bool:
