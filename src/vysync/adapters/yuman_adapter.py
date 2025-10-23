@@ -521,22 +521,44 @@ class YumanAdapter:
                     logger.warning("Yuman post‑patch fields failed on %s: %s", mat["id"], exc)
 
             # persistance en DB
-            self.sb.sb.table("equipments_mapping") \
-                .update({"yuman_material_id": mat["id"]}) \
-                .eq("vcom_device_id", e.vcom_device_id) \
-                .eq("vcom_system_key", e.vcom_system_key) \
-                .execute()
+            if e.serial_number:
+                self.sb.sb.table("equipments_mapping") \
+                    .update({"yuman_material_id": mat["id"]}) \
+                    .eq("serial_number", e.serial_number) \
+                    .execute()
+            else:
+                site_id = self.sb._site_id(e.vcom_system_key) if e.vcom_system_key else e.site_id
+                if site_id:
+                    self.sb.sb.table("equipments_mapping") \
+                        .update({"yuman_material_id": mat["id"]}) \
+                        .eq("vcom_device_id", e.vcom_device_id) \
+                        .eq("site_id", site_id) \
+                        .execute()
+                else:
+                    logger.error("[YUMAN] Cannot update yuman_material_id: no serial, no site_id for vcom_device_id=%s",
+                                 e.vcom_device_id)
             id_by_vcom[e.vcom_device_id] = mat["id"]
 
         # ─────────────────────────  MISE À JOUR  ───────────────────────── #
         for old, new in patch.update:
             # back‑fill yuman_material_id si manquant
             if new.yuman_material_id is None and old.yuman_material_id:
-                self.sb.sb.table("equipments_mapping") \
-                    .update({"yuman_material_id": old.yuman_material_id}) \
-                    .eq("vcom_device_id", new.vcom_device_id) \
-                    .eq("vcom_system_key", new.vcom_system_key) \
-                    .execute()
+                if new.serial_number:
+                    self.sb.sb.table("equipments_mapping") \
+                        .update({"yuman_material_id": old.yuman_material_id}) \
+                        .eq("serial_number", new.serial_number) \
+                        .execute()
+                else:
+                    site_id = self.sb._site_id(new.vcom_system_key) if new.vcom_system_key else new.site_id
+                    if site_id:
+                        self.sb.sb.table("equipments_mapping") \
+                            .update({"yuman_material_id": old.yuman_material_id}) \
+                            .eq("vcom_device_id", new.vcom_device_id) \
+                            .eq("site_id", site_id) \
+                            .execute()
+                    else:
+                        logger.error("[YUMAN] Cannot update yuman_material_id: no serial, no site_id for vcom_device_id=%s",
+                                     new.vcom_device_id)
 
             payload: Dict[str, Any] = {}
             fields_patch: List[Dict[str, Any]] = []
