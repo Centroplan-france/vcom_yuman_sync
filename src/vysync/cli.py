@@ -142,46 +142,52 @@ def sync_quick(vc: VCOMAPIClient, sb: SupabaseAdapter) -> None:
 
 # ────────────────────────── sync_full ──────────────────────────
 def sync_full(
-    vc: VCOMAPIClient,
-    sb: SupabaseAdapter,
-    y: YumanAdapter,
+    vc: VCOMAPIClient, 
+    sb: SupabaseAdapter, 
+    y: YumanAdapter, 
     site_key: str | None = None,
     maj_all: bool = False
 ) -> None:
     """
     Mode complet : vérification exhaustive de tous les sites.
-    Appelé hebdomadairement via cron.
-
-    ATTENTION : Ce mode fait ~2274 appels VCOM (25 minutes).
-    Utilisé pour détecter les modifications de sites existants.
     """
     logger.info("=" * 70)
     logger.info("[MODE FULL] Verification complete de tous les sites")
-    logger.info("[ATTENTION] Ce mode est LENT (~25 min) - utilise pour audit hebdomadaire")
+    logger.info("⚠️  Ce mode est LENT (~25 min) - utilisé pour audit hebdomadaire")
     logger.info("=" * 70)
-
+    
     # ─────────────────────────────────────────────────────────────────
     # PHASE 1 A – VCOM → Supabase
     # ─────────────────────────────────────────────────────────────────
-    db_sites   = sb.fetch_sites_v(site_key=site_key)
-    db_equips  = sb.fetch_equipments_v(site_key=site_key)
-    known_sys  = set(db_sites.keys())
+    db_sites = sb.fetch_sites_v(site_key=site_key)
+    db_equips = sb.fetch_equipments_v(site_key=site_key)
 
-    # snapshot VCOM
-    v_sites, v_equips = fetch_snapshot(vc, vcom_system_key=site_key, skip_keys=None if maj_all or site_key else known_sys,    )
+    # ✅ CORRECTION : Le mode FULL ne skip JAMAIS (sauf si --site-key spécifique)
+    # On veut TOUJOURS vérifier tous les sites pour détecter les changements
+    v_sites, v_equips = fetch_snapshot(
+        vc, 
+        vcom_system_key=site_key,  # None = tous les sites, ou un site spécifique
+        skip_keys=None              # ← JAMAIS skip en mode full
+    )
+    
+    # Si --site-key spécifié, filtrer APRÈS le fetch
     if site_key:
-        v_sites  = {k: s for k, s in v_sites.items() if k == site_key}
+        v_sites = {k: s for k, s in v_sites.items() if k == site_key}
         v_equips = {k: e for k, e in v_equips.items() if e.vcom_system_key == site_key}
+        
+        # Filtrer aussi la DB pour ne comparer que ce site
+        db_sites = {k: s for k, s in db_sites.items() if k == site_key}
+        db_equips = {k: e for k, e in db_equips.items() if e.vcom_system_key == site_key}
 
-    # filtrage incrémental
-    if not maj_all and not site_key:
-        seen = set(v_sites)
-        db_sites  = {k: s for k, s in db_sites.items()  if k in seen}
-        db_equips = {k: e for k, e in db_equips.items() if e.vcom_system_key in seen}
-
-    # diff & patch
-    patch_sites = diff_entities(db_sites, v_sites, ignore_fields={"yuman_site_id", "client_map_id", "code", "ignore_site"})
-    patch_equips = diff_entities(db_equips, v_equips, ignore_fields={"yuman_material_id", "parent_id"})
+    # Diff & patch
+    patch_sites = diff_entities(
+        db_sites, v_sites, 
+        ignore_fields={"yuman_site_id", "client_map_id", "code", "ignore_site"}
+    )
+    patch_equips = diff_entities(
+        db_equips, v_equips, 
+        ignore_fields={"yuman_material_id", "parent_id"}
+    )
 
     logger.info(
         "[VCOM→DB] Sites  Δ  +%d  ~%d  -%d",
@@ -195,6 +201,7 @@ def sync_full(
         len(patch_equips.update),
         len(patch_equips.delete),
     )
+    
     while input("Écrivez 'oui' pour continuer : ").strip().lower() != "oui":
         pass
 
@@ -245,93 +252,6 @@ def sync_full(
         len(patch_maps_equips.add),
         len(patch_maps_equips.update),
         len(patch_maps_equips.delete),
-    )
-
-    # ───────── Helpers ─────────
-    def _norm_serial(s: str | None) -> str:
-        return (s or "").strip().upper()
-
-    # ───────── Index DB / Cible (avant diff) ─────────
-    db_by_serial  = { _norm_serial(e.serial_number): e for e in db_maps_equips.values() if e.serial_number is not None }
-    tgt_by_serial = { _norm_serial(e.serial_number): e for e in y_equips.values()       if e.serial_number is not None }
-
-    db_by_mid: dict[int, any] = {}
-    for e in db_maps_equips.values():
-        mid = getattr(e, "yuman_material_id", None)
-        if mid is not None:
-            db_by_mid[mid] = e
-
-    # ───────── Audit ensembliste ─────────
-    keys_db  = set(db_by_serial.keys())
-    keys_tgt = set(tgt_by_serial.keys())
-    only_in_tgt = sorted(keys_tgt - keys_db)
-    only_in_db  = sorted(keys_db  - keys_tgt)
-    logger.info("AUDIT pre-diff: only_in_tgt=%d | only_in_db=%d", len(only_in_tgt), len(only_in_db))
-
-    # ───────── Audit des ADD issus du diff_fill_missing ─────────
-    logger.info(
-        "AUDIT patch EquipsMapping: +%d ~%d -%d",
-        len(patch_maps_equips.add),
-        len(patch_maps_equips.update),
-        len(patch_maps_equips.delete),
-    )
-
-    for e in patch_maps_equips.add:
-        sk  = _norm_serial(e.serial_number)
-        mid = getattr(e, "yuman_material_id", None)
-        in_db_by_serial = sk in db_by_serial
-        in_db_by_mid    = (mid is not None) and (mid in db_by_mid)
-        logger.warning(
-            "[ADD] serial=%r | key_norm=%r | mid=%r | cat=%s | vcom=%s | inDB_bySerial=%s | inDB_byMID=%s",
-            e.serial_number, sk, mid, getattr(e, "category_id", None), getattr(e, "vcom_system_key", None),
-            in_db_by_serial, in_db_by_mid
-        )
-        if in_db_by_mid:
-            logger.warning("  → DIAG: même yuman_material_id déjà en DB → devrait être un UPDATE, pas un ADD.")
-        elif in_db_by_serial:
-            logger.warning("  → DIAG: serial présent en DB mais non matché par le diff (clé/normalisation).")
-
-    # ───────── Requalification des ADD → UPDATE (serial / mid) + dédoublonnage ─────────
-    safe_add:  list = []
-    force_upd: list = []
-    seen_serials: set[str] = set()
-
-    for e in patch_maps_equips.add:
-        s   = _norm_serial(e.serial_number)
-        mid = getattr(e, "yuman_material_id", None)
-
-        # 1) bannir serial vide
-        if not s:
-            logger.error("[SB] SKIP ADD (serial vide) cat=%s vcom=%s mid=%s", e.category_id, e.vcom_system_key, mid)
-            continue
-
-        # 2) dédoublonner à l'intérieur du patch.add
-        if s in seen_serials:
-            logger.warning("[SB] SKIP ADD (doublon dans patch) serial=%s", s)
-            continue
-        seen_serials.add(s)
-
-        # 3) requalifier si déjà présent par yuman_material_id
-        if mid is not None and mid in db_by_mid:
-            force_upd.append((db_by_mid[mid], e))
-            continue
-
-        # 4) requalifier si déjà présent par serial
-        if s in db_by_serial:
-            force_upd.append((db_by_serial[s], e))
-            continue
-
-        # 5) sinon, vrai ADD
-        safe_add.append(e)
-
-    # éviter de pousser en UPDATE deux fois le même serial (si le diff avait déjà mis un UPDATE)
-    serials_already_upd = { _norm_serial(ne.serial_number) for _, ne in patch_maps_equips.update }
-    force_upd = [ (old, ne) for (old, ne) in force_upd if _norm_serial(ne.serial_number) not in serials_already_upd ]
-
-    patch_maps_equips = PatchSet(
-        add=safe_add,
-        update=patch_maps_equips.update + force_upd,
-        delete=patch_maps_equips.delete
     )
 
     logger.info(
