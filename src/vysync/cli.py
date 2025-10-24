@@ -299,7 +299,7 @@ def sync_full(
     sb_sites = {
                 k: s
                 for k, s in sb_sites.items()
-                if not (getattr(s, "ignore_site", False) and getattr(s, "yuman_site_id", None) is None)
+                if not getattr(s, "ignore_site", False)
             }
 
     # ─────────────────────────────────────────────────────────────────
