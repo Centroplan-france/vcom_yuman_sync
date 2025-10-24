@@ -7,10 +7,11 @@ from __future__ import annotations
 
 
 from typing import Dict, Tuple, Any
-from vysync.app_logging import init_logger, _dump
+import logging
+from vysync.app_logging import _dump
 from vysync.models import Site, Equipment, CAT_INVERTER, CAT_MODULE, CAT_STRING
 
-logger = init_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def build_address(addr: Dict[str, Any]) -> str | None:

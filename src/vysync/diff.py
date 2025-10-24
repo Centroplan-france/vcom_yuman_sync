@@ -13,9 +13,8 @@ from typing import Any, Dict, Generic, List, Tuple, TypeVar, NamedTuple, Optiona
 from vysync.models import Site, Equipment, CAT_MODULE, CAT_STRING, CAT_INVERTER, CAT_CENTRALE, CAT_SIM
 import logging
 import re
-from vysync.app_logging import init_logger
-logger = init_logger(__name__)
-logger.setLevel(logging.DEBUG)
+
+logger = logging.getLogger(__name__)
 
 
 T = TypeVar("T")

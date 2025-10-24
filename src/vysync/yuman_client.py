@@ -9,9 +9,8 @@ from typing import Any, Dict, List, Optional
 import requests
 from requests import Response
 import logging
-from .app_logging import init_logger
 
-logger = init_logger(__name__)
+logger = logging.getLogger(__name__)
 
 DEFAULT_PER_PAGE   = 100   
 DEFAULT_MAX_RETRY  = 10

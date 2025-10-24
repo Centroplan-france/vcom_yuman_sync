@@ -18,15 +18,15 @@ Fonctions :
 from __future__ import annotations
 
 import re
+import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple, Optional
 
-from vysync.app_logging import init_logger
 from vysync.models import Site
 from vysync.yuman_client import YumanClient
 from vysync.adapters.supabase_adapter import SupabaseAdapter
 
-logger = init_logger(__name__)
+logger = logging.getLogger(__name__)
 
 SITE_TABLE = "sites_mapping"
 EQUIP_TABLE = "equipments_mapping"

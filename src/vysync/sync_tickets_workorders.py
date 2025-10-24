@@ -16,17 +16,17 @@ from __future__ import annotations
 
 import argparse
 import os
+import logging
 import textwrap
 from typing import Any, Dict, List
 
 from supabase import create_client
-from vysync.app_logging import init_logger
 from vysync.vcom_client import VCOMAPIClient
 from vysync.yuman_client import YumanClient
 
 # ---------------------------------------------------------------------------
 # Logger global
-logger = init_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # CLI

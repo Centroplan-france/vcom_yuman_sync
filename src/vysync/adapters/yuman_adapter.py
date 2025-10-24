@@ -15,16 +15,17 @@ Synchronisation Yuman ⇄ Supabase / VCOM.
 
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import asdict, fields as dc_fields
-from vysync.app_logging import init_logger, _dump
+import logging
+from vysync.app_logging import _dump
 from vysync.diff import diff_entities, PatchSet
 from vysync.models import (
     Site,
     Equipment,
-    Client, 
+    Client,
     CAT_INVERTER,
     CAT_MODULE,
     CAT_STRING,
-    CAT_CENTRALE, 
+    CAT_CENTRALE,
     CAT_SIM
 )
 from vysync.yuman_client import YumanClient
@@ -35,7 +36,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 # ────────────────────────────── Logging ────────────────────────────────
-logger = init_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # ───────────────────────── Blueprints custom fields ────────────────────
 SITE_FIELDS = {
