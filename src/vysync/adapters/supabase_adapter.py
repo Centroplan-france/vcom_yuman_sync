@@ -18,7 +18,6 @@ def _now_iso() -> str:
 def _norm_serial(s: str | None) -> str:
     return (s or "").strip().upper()
 
-from vysync.app_logging import init_logger
 from vysync.logging_config import get_updates_logger
 from vysync.models import (
     Site,
@@ -31,9 +30,8 @@ from vysync.models import (
     CAT_CENTRALE,
 )
 
-# Logger principal (niveau INFO en console)
-logger = init_logger(__name__)
-logger.setLevel(logging.DEBUG)
+# Logger principal (configuré par setup_logging)
+logger = logging.getLogger(__name__)
 
 # Logger dédié aux updates (fichier séparé)
 updates_logger = get_updates_logger()

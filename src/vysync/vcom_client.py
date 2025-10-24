@@ -10,15 +10,13 @@ from typing import Any, Dict, List
 import json
 import requests
 
-from .app_logging import init_logger
-
 try:                              # optional .env
     from dotenv import load_dotenv
     load_dotenv()
 except Exception:
     pass
 
-logger = init_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class VCOMAPIClient:

@@ -30,7 +30,7 @@ Modes disponibles :
 import argparse
 import logging
 
-from vysync.app_logging import init_logger, _dump
+from vysync.app_logging import _dump
 from vysync.adapters.vcom_adapter import fetch_snapshot
 from vysync.adapters.supabase_adapter import SupabaseAdapter
 from vysync.adapters.yuman_adapter import YumanAdapter
@@ -39,8 +39,8 @@ from vysync.diff import diff_entities, diff_fill_missing, set_parent_map, PatchS
 from vysync.conflict_resolution import detect_and_resolve_site_conflicts, resolve_clients_for_sites
 
 # ─────────────────────────── Logger ────────────────────────────
-logger = init_logger(__name__)
-logger.setLevel(logging.DEBUG)
+# Logger will be configured by setup_logging() in main()
+logger = logging.getLogger(__name__)
 
 
 # ────────────────────────── sync_quick ─────────────────────────
