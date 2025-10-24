@@ -327,23 +327,37 @@ class SupabaseAdapter:
             e_old = item[0] if isinstance(item, tuple) else None
             e_new = item[1] if isinstance(item, tuple) else item
 
-            payload = {
-                k: v for k, v in e_new.to_db_dict().items()
-                if v is not None and k in VALID_COLS and k not in {"vcom_device_id", "vcom_system_key", "yuman_site_id"}
-            }
-            if not payload:
-                logger.warning("[SB] UPDATE SKIPPED (payload vide): serial=%s mid=%s",
-                              e_new.serial_number, e_new.yuman_material_id)
-                continue
+            # NE METTRE À JOUR QUE LES CHAMPS QUI ONT CHANGÉ
+            payload = {}
+            for k, v in e_new.to_db_dict().items():
+                # Skip les champs exclus
+                if k in {"vcom_device_id", "vcom_system_key", "yuman_site_id"}:
+                    continue
+                # Skip les champs non valides
+                if k not in VALID_COLS:
+                    continue
+                # Skip si la valeur est None
+                if v is None:
+                    continue
 
-            # normaliser serial côté payload
+                # AJOUTER SEULEMENT SI LA VALEUR A CHANGÉ
+                old_value = getattr(e_old, k, None) if e_old else None
+                if old_value != v:
+                    payload[k] = v
+
+            # normaliser serial côté payload si présent
             if "serial_number" in payload:
                 payload["serial_number"] = _norm_serial(payload["serial_number"])
 
-            # site_id (si résoluble)
+            # site_id (si résoluble et changé)
             site_id = self._site_id(e_new.vcom_system_key)
-            if site_id is not None:
+            if site_id is not None and (not e_old or site_id != e_old.site_id):
                 payload["site_id"] = site_id
+
+            if not payload:
+                logger.debug("[SB] UPDATE SKIPPED (aucun changement): serial=%s mid=%s",
+                            e_new.serial_number, e_new.yuman_material_id)
+                continue
 
             # LOG des changements détectés
             if e_old:
@@ -535,17 +549,32 @@ class SupabaseAdapter:
         for old, e in patch.update:
             # resolve site
             sid = e.site_id or self._site_id_by_yuman(e.yuman_site_id)
-            # si non résolu, on n'écrase pas site_id plutôt que skip total
-            payload = {
-                k: v for k, v in e.to_db_dict().items()
-                if v is not None and k in VALID and k not in {"vcom_device_id", "yuman_material_id", "vcom_system_key", "yuman_site_id"}
-            }
-            if sid is not None:
+
+            # NE METTRE À JOUR QUE LES CHAMPS QUI ONT CHANGÉ
+            payload = {}
+            for k, v in e.to_db_dict().items():
+                # Skip les champs exclus
+                if k in {"vcom_device_id", "yuman_material_id", "vcom_system_key", "yuman_site_id"}:
+                    continue
+                # Skip les champs non valides
+                if k not in VALID:
+                    continue
+                # Skip si la valeur est None
+                if v is None:
+                    continue
+
+                # AJOUTER SEULEMENT SI LA VALEUR A CHANGÉ
+                old_value = getattr(old, k, None)
+                if old_value != v:
+                    payload[k] = v
+
+            # Ajouter site_id si résolu et différent
+            if sid is not None and sid != old.site_id:
                 payload["site_id"] = sid
 
             if not payload:
-                logger.warning("[SB] UPDATE SKIPPED (payload vide): serial=%s mid=%s",
-                              e.serial_number, e.yuman_material_id)
+                logger.debug("[SB] UPDATE SKIPPED (aucun changement): serial=%s mid=%s",
+                            e.serial_number, e.yuman_material_id)
                 continue
 
             # normaliser serial dans le payload si présent
