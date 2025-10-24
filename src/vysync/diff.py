@@ -17,6 +17,36 @@ import re
 logger = logging.getLogger(__name__)
 
 
+def _format_diff(old: Any, new: Any) -> str:
+    """
+    Formate les différences entre deux objets en affichant uniquement les champs modifiés.
+
+    Format: champ: {ancienne_valeur -> nouvelle_valeur}; champ2: {ancienne -> nouvelle}
+    """
+    if not (is_dataclass(old) and is_dataclass(new)):
+        return f"{old!r} -> {new!r}"
+
+    old_dict = asdict(old)
+    new_dict = asdict(new)
+
+    changes = []
+    for key in old_dict.keys():
+        old_val = old_dict.get(key)
+        new_val = new_dict.get(key)
+
+        # Ignorer si les valeurs sont identiques
+        if old_val == new_val:
+            continue
+
+        # Formater la différence
+        changes.append(f"{key}: {{{old_val!r} -> {new_val!r}}}")
+
+    if not changes:
+        return "(aucun changement détecté)"
+
+    return "; ".join(changes)
+
+
 T = TypeVar("T")
 
 class PatchSet(NamedTuple, Generic[T]):
@@ -173,15 +203,15 @@ def diff_entities(
     for k, tgt in target.items():
         cur = current.get(k)
         if cur is None:
-            logger.debug("AJOUT (clé=%s) cible=%r", k, tgt)
+            logger.debug("AJOUT (clé=%s)", k)
             add.append(tgt)
         elif not _equals(cur, tgt, ignore_fields=ignore_fields):
-            logger.debug("MISE À JOUR (clé=%s) → actuel=%r, cible=%r", k, cur, tgt)
+            logger.debug("MISE À JOUR (clé=%s) → %s", k, _format_diff(cur, tgt))
             upd.append((cur, tgt))
 
     for k, cur in current.items():
         if k not in target:
-            logger.debug("SUPPRESSION (clé=%s) actuel=%r", k, cur)
+            logger.debug("SUPPRESSION (clé=%s)", k)
             delete.append(cur)
 
     return PatchSet(add, upd, delete)
@@ -309,8 +339,8 @@ def diff_fill_missing(
             ]
             if missing:
                 logger.debug(
-                    "MISE À JOUR (clé=%s) champs manquants=%s | actuel=%r | cible=%r",
-                    key, ", ".join(missing), db_obj, src
+                    "MISE À JOUR (clé=%s) champs manquants=[%s] → %s",
+                    key, ", ".join(missing), _format_diff(db_obj, src)
                 )
                 upd.append((db_obj, src))
 

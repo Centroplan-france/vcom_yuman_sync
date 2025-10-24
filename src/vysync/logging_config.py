@@ -32,6 +32,14 @@ def setup_logging():
     # Supprimer les handlers existants (évite les doublons)
     root_logger.handlers.clear()
 
+    # ── Réduire le bruit des bibliothèques tierces ──
+    # Ces bibliothèques génèrent trop de logs DEBUG inutiles
+    logging.getLogger("hpack").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
+
     # ── Handler 1 : Console (INFO uniquement) ──
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
