@@ -78,6 +78,11 @@ def _equals(a: T, b: T, ignore_fields: Optional[set[str]] = None) -> bool:
                 if lng is not None:
                     d["longitude"] = round(float(lng), 5)
 
+            # ✅ RÈGLE MÉTIER : Si target (b/db) a None, ignorer ce champ dans la comparaison
+            for key in list(db.keys()):
+                if db[key] is None and key in da:
+                    db[key] = da[key]
+
             return da == db
         
         if isinstance(a, Equipment) and isinstance(b, Equipment):
@@ -93,6 +98,12 @@ def _equip_equals(a: Equipment, b: Equipment, ignore_fields: Optional[Set[str]] 
         for field in ignore_fields:
             da.pop(field, None)
             db.pop(field, None)
+
+    # ✅ RÈGLE MÉTIER : Si target (b/db) a None, ignorer ce champ dans la comparaison
+    # On copie la valeur de current (a/da) pour que la comparaison retourne True
+    for key in list(db.keys()):
+        if db[key] is None and key in da:
+            db[key] = da[key]  # ← considérer qu'il n'y a pas de changement
 
     # Normalisation
     for d in (da, db):
