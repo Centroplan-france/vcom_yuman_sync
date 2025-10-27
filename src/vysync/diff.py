@@ -119,6 +119,16 @@ def _equals(a: T, b: T, ignore_fields: Optional[set[str]] = None) -> bool:
     return a == b
 
 def _equip_equals(a: Equipment, b: Equipment, ignore_fields: Optional[Set[str]] = None) -> bool:
+    """
+    Compare deux équipements en ne vérifiant QUE les champs modifiables via l'API Yuman.
+
+    Champs NON-modifiables (ignorés dans la comparaison) :
+    - name : toujours ignoré car non-modifiable via API Yuman
+    - count : ignoré car non-modifiable via API Yuman (pour STRING c'est un custom field)
+
+    Les champs brand/model/count pour STRING sont désormais correctement mappés depuis les
+    custom fields Yuman ("marque du module", "modèle de module", "nombre de modules").
+    """
     da = a.to_dict()
     db = b.to_dict()
 
@@ -146,45 +156,48 @@ def _equip_equals(a: Equipment, b: Equipment, ignore_fields: Optional[Set[str]] 
     cat = da.get("category_id")
 
     if cat == CAT_MODULE:
+        # MODULE : brand (standard), model (custom field "Modèle"), count ignoré
         return (
             da["brand"].lower()       == db["brand"].lower() and
             da["model"].lower()       == db["model"].lower() and
-            da["count"]               == db["count"] and
             da["serial_number"]       == db["serial_number"]
         )
     elif cat == CAT_STRING:
+        # STRING : brand/model/count sont dans custom fields Yuman
+        # name est non-modifiable donc ignoré
         # Remap du parent_id VCOM → Yuman
         pb = db.get("parent_id","")
         db["parent_id"] = _parent_map.get(pb, pb)
         return (
-            da["name"]                == db["name"] and
             da["brand"].lower()       == db["brand"].lower() and
             da["model"].lower()       == db["model"].lower() and
             da["count"]               == db["count"] and
-            da["name"]                == db["name"] and
             da["vcom_device_id"]      == db["vcom_device_id"] and
             da["parent_id"]           == db["parent_id"] and
             da["serial_number"]       == db["serial_number"]
         )
     elif cat == CAT_INVERTER:
+        # INVERTER : brand (standard), model (custom field "Modèle")
+        # name est non-modifiable donc ignoré
         return (
-            da["name"]                == db["name"] and
             da["brand"].lower()       == db["brand"].lower() and
             da["model"].lower()       == db["model"].lower() and
             da["serial_number"]       == db["serial_number"] and
-            da["vcom_device_id"]      == db["vcom_device_id"] 
+            da["vcom_device_id"]      == db["vcom_device_id"]
         )
     elif cat == CAT_CENTRALE:
+        # CENTRALE : uniquement serial_number
         return (
-            da["serial_number"]                == db["serial_number"]            
+            da["serial_number"]       == db["serial_number"]
         )
     elif cat == CAT_SIM:
+        # SIM : brand/model sont dans custom fields ("Opérateur", "N° carte SIM")
+        # name est non-modifiable donc ignoré
         return (
-            da["name"]                == db["name"] and
             da["brand"].lower()       == db["brand"].lower() and
             da["model"].lower()       == db["model"].lower() and
             da["serial_number"]       == db["serial_number"] and
-            da["vcom_device_id"]      == db["vcom_device_id"] 
+            da["vcom_device_id"]      == db["vcom_device_id"]
         )
     else:
         return da == db
