@@ -173,20 +173,26 @@ class YumanAdapter:
         Récupère tous les matériels Yuman (modules, onduleurs, strings, SIM, etc.)
         et les normalise en objets `Equipment`.
 
-        • Clé du dictionnaire retourné : `yuman_material_id` (m["id"])
+        • Clé du dictionnaire retourné : `serial_number`
         • Chaque Equipment contient :
-            - `site_id`         : clé étrangère Supabase (résolue ici)
-            - `yuman_site_id`   : id du site côté Yuman
-            - `vcom_system_key` : si le site est déjà mappé à VCOM
+            - `site_id`         : clé étrangère Supabase (résolue via sites_mapping)
+            - `vcom_system_key` : si le site est déjà mappé à VCOM (optionnel)
         """
         # -------------------------------------------------------------
         # 1) Index rapide : yuman_site_id  ➜  (site_id, vcom_system_key)
+        #    Utilise le cache du sb_adapter pour avoir les bonnes correspondances
         # -------------------------------------------------------------
-        sites_by_yid: dict[int, tuple[int, str | None]] = {
-            s.yuman_site_id: (s.id, s.vcom_system_key)
-            for s in self.fetch_sites().values()
-            if s.yuman_site_id is not None
-        }
+        sites_by_yid: dict[int, tuple[int, str | None]] = {}
+
+        # Charger les sites depuis Supabase pour avoir les IDs corrects
+        for yid, site_id in self.sb._map_yid_to_id.items():
+            # Retrouver le vcom_system_key correspondant
+            vcom_key = None
+            for vk, sid in self.sb._map_vcom_to_id.items():
+                if sid == site_id:
+                    vcom_key = vk
+                    break
+            sites_by_yid[yid] = (site_id, vcom_key)
 
         equips: Dict[str, Equipment] = {}
 
@@ -261,7 +267,6 @@ class YumanAdapter:
             # ---------------------------------------------------------
             equip = Equipment(
                 site_id          = site_id,          # clé étrangère Supabase
-                yuman_site_id    = m["site_id"],     # id Yuman du site
                 vcom_system_key  = vcom_key,         # peut être None
                 category_id      = cat_id,
                 eq_type          = eq_type,

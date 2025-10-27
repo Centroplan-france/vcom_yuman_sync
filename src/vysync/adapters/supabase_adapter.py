@@ -85,29 +85,24 @@ class SupabaseAdapter:
             return None
         return self._map_yid_to_id.get(yuman_site_id)
 
-    def _enrich_equipment_with_site_keys(self, equipment: Equipment) -> Equipment:
-        """Reconstruit vcom_system_key et yuman_site_id depuis site_id via le cache."""
+    def _enrich_equipment_with_vcom_key(self, equipment: Equipment) -> Equipment:
+        """Reconstruit vcom_system_key depuis site_id via le cache."""
         if equipment.site_id is None:
             return equipment
 
-        # Trouver le site correspondant
+        # Trouver le vcom_system_key correspondant
         vcom_key = None
-        yuman_id = None
         for key, sid in self._map_vcom_to_id.items():
             if sid == equipment.site_id:
                 vcom_key = key
                 break
-        for yid, sid in self._map_yid_to_id.items():
-            if sid == equipment.site_id:
-                yuman_id = yid
-                break
 
-        # Reconstruire l'objet avec les clés
-        return Equipment(
-            **{**equipment.to_dict(),
-               "vcom_system_key": vcom_key,
-               "yuman_site_id": yuman_id}
-        )
+        # Reconstruire l'objet avec le vcom_system_key
+        if vcom_key and vcom_key != equipment.vcom_system_key:
+            return Equipment(
+                **{**equipment.to_dict(), "vcom_system_key": vcom_key}
+            )
+        return equipment
 
 
 
@@ -202,7 +197,7 @@ class SupabaseAdapter:
                     parent_id=r.get("parent_id"),
                     yuman_material_id=r.get("yuman_material_id"),
                 )
-                equips[r.get("serial_number")] = self._enrich_equipment_with_site_keys(base_eq)
+                equips[r.get("serial_number")] = self._enrich_equipment_with_vcom_key(base_eq)
             if len(page) < step:
                 break        # dernière page atteinte
             from_row += step
@@ -235,7 +230,7 @@ class SupabaseAdapter:
                     parent_id=r.get("parent_id"),
                     yuman_material_id=r.get("yuman_material_id"),
                 )
-                equips[r["serial_number"]] = self._enrich_equipment_with_site_keys(base_eq)
+                equips[r["serial_number"]] = self._enrich_equipment_with_vcom_key(base_eq)
             if len(page) < step:
                 break        # dernière page atteinte
             from_row += step
@@ -329,7 +324,7 @@ class SupabaseAdapter:
             payload = {}
             for k, v in e_new.to_db_dict().items():
                 # Skip les champs exclus
-                if k in {"vcom_device_id", "vcom_system_key", "yuman_site_id"}:
+                if k in {"vcom_device_id", "vcom_system_key"}:
                     continue
                 # Skip les champs non valides
                 if k not in VALID_COLS:
@@ -504,10 +499,10 @@ class SupabaseAdapter:
 
         for e in patch.add:
             # resolve site
-            sid = e.site_id or self._site_id_by_yuman(e.yuman_site_id)
+            sid = e.site_id
             if sid is None:
-                logger.error("[SB] site Yuman %s introuvable → skip ADD (mid=%s)",
-                            e.yuman_site_id, e.yuman_material_id)
+                logger.error("[SB] site_id manquant → skip ADD (mid=%s)",
+                            e.yuman_material_id)
                 continue
 
             row = {k: v for k, v in e.to_db_dict().items() if k in VALID}
@@ -546,13 +541,13 @@ class SupabaseAdapter:
         # -------------------------- UPDATE --------------------------
         for old, e in patch.update:
             # resolve site
-            sid = e.site_id or self._site_id_by_yuman(e.yuman_site_id)
+            sid = e.site_id
 
             # NE METTRE À JOUR QUE LES CHAMPS QUI ONT CHANGÉ
             payload = {}
             for k, v in e.to_db_dict().items():
                 # Skip les champs exclus
-                if k in {"vcom_device_id", "yuman_material_id", "vcom_system_key", "yuman_site_id"}:
+                if k in {"vcom_device_id", "yuman_material_id", "vcom_system_key"}:
                     continue
                 # Skip les champs non valides
                 if k not in VALID:

@@ -98,7 +98,8 @@ def sync_quick(vc: VCOMAPIClient, sb: SupabaseAdapter) -> None:
             v_sites, v_equips = fetch_snapshot(
                 vc,
                 vcom_system_key=key,  # limite a CE site
-                skip_keys=None
+                skip_keys=None,
+                sb_adapter=sb
             )
 
             logger.info("             Recupere : %d site, %d equipements",
@@ -165,9 +166,10 @@ def sync_full(
     # ✅ CORRECTION : Le mode FULL ne skip JAMAIS (sauf si --site-key spécifique)
     # On veut TOUJOURS vérifier tous les sites pour détecter les changements
     v_sites, v_equips = fetch_snapshot(
-        vc, 
+        vc,
         vcom_system_key=site_key,  # None = tous les sites, ou un site spécifique
-        skip_keys=None              # ← JAMAIS skip en mode full
+        skip_keys=None,              # ← JAMAIS skip en mode full
+        sb_adapter=sb
     )
     
     # Si --site-key spécifié, filtrer APRÈS le fetch
@@ -329,7 +331,7 @@ def sync_full(
         if e.yuman_material_id
     }
     set_parent_map(id_by_vcom)
-    patch_e = diff_entities(y_equips, sb_equips, ignore_fields={"vcom_system_key", "yuman_site_id", "parent_id"})
+    patch_e = diff_entities(y_equips, sb_equips, ignore_fields={"vcom_system_key", "parent_id"})
     logger.info(
         "[DB→YUMAN] Equips Δ  +%d  ~%d  -%d",
         len(patch_e.add),

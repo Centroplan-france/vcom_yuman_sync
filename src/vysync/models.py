@@ -36,7 +36,7 @@ class Site:
         return asdict(self)
 
 # ──────────────────────── Equipements ────────────────────────
-@dataclass(frozen=True, eq=False)               # ① on désactive l’__eq__ auto
+@dataclass(frozen=True, eq=False)               # ① on désactive l'__eq__ auto
 class Equipment:
     category_id: int
     eq_type: str
@@ -50,7 +50,6 @@ class Equipment:
     serial_number: Optional[str] = None
     count: Optional[int] = None                # ex-string_count ?
     parent_id: Optional[str] = None
-    yuman_site_id: Optional[int] | None = None
     
 
 
@@ -67,7 +66,6 @@ class Equipment:
         """Sérialisation pour persistance Supabase (exclut les colonnes supprimées)."""
         d = asdict(self)
         d.pop("vcom_system_key", None)
-        d.pop("yuman_site_id", None)
         return d
 
     # --- égalité (cohérente avec la doc-string) ---------- ②
