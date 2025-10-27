@@ -223,25 +223,38 @@ class YumanAdapter:
                 "other"
             )
 
-            # --- count (nombre de modules) ---------------------------
-            raw_nb = raw_fields.get("nombre de module")
-            try:
-                count = int(raw_nb) if raw_nb not in (None, "") else None
-            except ValueError:
-                count = None
-
-            # --- autres normalisations -------------------------------
-            mppt_idx     = str(raw_fields.get("MPPT index", "")).strip()
-            module_brand = (raw_fields.get("marque du module") or "").strip()
-            module_model = (raw_fields.get("model de module")  or "").strip()
-
+            # --- Extraction valeurs pour Equipment -------------------
             name   = (m.get("name")          or "").strip()
             brand  = (m.get("brand")         or "").strip()
-            model  = (raw_fields.get("Modèle")         or "").strip()
             serial = (m.get("serial_number") or "").strip()
 
+            # count et model : NE PAS les remplir depuis les champs standards
+            # Ils seront dans _custom_fields
+            count = None  # Volontairement None
+            model = None  # Volontairement None
+
             # ---------------------------------------------------------
-            # 3) Construction de l'objet Equipment
+            # NOUVEAU : Construction de _custom_fields
+            # ---------------------------------------------------------
+            custom_fields = {}
+
+            if cat_id == CAT_STRING:
+                custom_fields["mppt_idx"] = str(raw_fields.get("MPPT index", "")).strip()
+                custom_fields["nb_modules"] = str(raw_fields.get("nombre de module", ""))
+                custom_fields["module_brand"] = (raw_fields.get("marque du module") or "").strip()
+                custom_fields["module_model"] = (raw_fields.get("model de module") or "").strip()
+                # Aussi dans Modèle (champ commun)
+                if raw_fields.get("Modèle"):
+                    custom_fields["Modèle"] = raw_fields.get("Modèle").strip()
+
+            elif cat_id == CAT_INVERTER:
+                custom_fields["Modèle"] = (raw_fields.get("Modèle") or "").strip()
+
+            elif cat_id == CAT_MODULE:
+                custom_fields["Modèle"] = (raw_fields.get("Modèle") or "").strip()
+
+            # ---------------------------------------------------------
+            # Construction de l'objet Equipment
             # ---------------------------------------------------------
             equip = Equipment(
                 site_id          = site_id,          # clé étrangère Supabase
@@ -252,18 +265,13 @@ class YumanAdapter:
                 vcom_device_id   = vdid.strip(),
                 name             = name,
                 brand            = brand,
-                model            = model,
+                model            = model,  # None volontairement
                 serial_number    = serial,
-                count            = count,
+                count            = count,  # None volontairement
                 yuman_material_id = m["id"],
                 parent_id        = m.get("parent_id"),
+                _custom_fields   = custom_fields,  # NOUVEAU
             )
-
-            # champs custom pour diff ultérieur
-            object.__setattr__(equip, "mppt_idx",     mppt_idx)
-            object.__setattr__(equip, "nb_modules",   str(count or ""))
-            object.__setattr__(equip, "module_brand", module_brand)
-            object.__setattr__(equip, "module_model", module_model)
 
             equips[m["serial_number"]] = equip  # clé = serial_number
 
@@ -561,70 +569,23 @@ class YumanAdapter:
                         logger.error("[YUMAN] Cannot update yuman_material_id: no serial, no site_id for vcom_device_id=%s",
                                      new.vcom_device_id)
 
-            payload: Dict[str, Any] = {}
-            fields_patch: List[Dict[str, Any]] = []
+            # ────────────────────────────────────────────────────────────────
+            # NOUVEAU : Utiliser to_yuman_update_payload()
+            # ────────────────────────────────────────────────────────────────
+            payload = new.to_yuman_update_payload()
 
-            # -------- CHAMPS COMMUNS (toutes catégories) --------
-            def _set(attr: str, target: Dict[str, Any] = payload):
-                ov, nv = getattr(old, attr), getattr(new, attr)
-                if (ov or "") != (nv or "") and nv is not None:
-                    target[attr] = nv
+            # Vérifier si le payload contient des changements
+            if not payload or (len(payload) == 0):
+                logger.debug("[YUMAN] UPDATE SKIPPED (aucun changement): serial=%s mid=%s",
+                            new.serial_number, new.yuman_material_id)
+                continue
 
-            _set("name")
-            _set("brand")
-            _set("serial_number")
-            _set("count")
+            # Log du payload
+            logger.debug("[YUMAN] update_material %s payload=%s",
+                        old.yuman_material_id, payload)
 
-            # -------- CAT_SPÉCIFIQUES --------
-            if old.category_id == CAT_INVERTER:
-                if old.vcom_device_id != new.vcom_device_id:
-                    fields_patch.append({"blueprint_id": BP_INVERTER_ID,
-                                        "value": new.vcom_device_id})
-                if old.model != new.model:
-                    fields_patch.append({"blueprint_id": BP_MODEL,
-                                        "value": new.model})
-
-            if old.category_id == CAT_MODULE:
-                if old.model != new.model:
-                    fields_patch.append({"blueprint_id": BP_MODEL,
-                                        "value": new.model})
-                    
-            if old.category_id == CAT_STRING:
-                # parent
-                if new.parent_id and old.parent_id != new.parent_id:
-                    parent_mat = id_by_vcom.get(new.parent_id)
-                    if parent_mat:
-                        payload["parent_id"] = parent_mat
-                # champs custom
-                def _maybe(bp, ov, nv):
-                    if (ov or "") != (nv or ""):
-                        fields_patch.append({"blueprint_id": bp, "value": nv})
-
-                old_mppt     = getattr(old, "mppt_idx", "")
-                old_nb       = getattr(old, "nb_modules", "")
-                old_bmod     = getattr(old, "module_brand", "")
-                old_mmodel   = getattr(old, "module_model", "")
-
-                try:
-                    new_mppt = new.vcom_device_id.split("-MPPT-")[1].split(".")[0]
-                except Exception:
-                    new_mppt = "?"
-
-                _maybe(BP_MPPT_IDX,     old_mppt,   new_mppt)
-                _maybe(BP_NB_MODULES,   old_nb,     str(new.count or ""))
-                _maybe(BP_MODULE_BRAND, old_bmod,   new.brand or "")
-                _maybe(BP_MODULE_MODEL, old_mmodel, new.model or "")
-
-            # aucun champ custom particulier pour CAT_MODULE / CAT_SIM /
-            # CAT_CENTRALE ; le payload générique suffit.
-
-            if fields_patch:
-                payload["fields"] = fields_patch
-
-            if payload:
-                logger.debug("[YUMAN] update_material %s payload=%s",
-                            old.yuman_material_id, payload)
-                self.yc.update_material(old.yuman_material_id, payload)
+            # Envoi du PATCH
+            self.yc.update_material(old.yuman_material_id, payload)
 
         # ─────────────────────────  DELETE  ─────────────────────────── #
         # if patch.delete:

@@ -189,6 +189,7 @@ class SupabaseAdapter:
                 or []
             )
             for r in page:
+                # Construction de base
                 base_eq = Equipment(
                     site_id=r["site_id"],
                     category_id=r["category_id"],
@@ -202,7 +203,40 @@ class SupabaseAdapter:
                     parent_id=r.get("parent_id"),
                     yuman_material_id=r.get("yuman_material_id"),
                 )
-                equips[r.get("serial_number")] = self._enrich_equipment_with_site_keys(base_eq)
+
+                # NOUVEAU : Peupler _custom_fields selon la catégorie
+                custom_fields = {}
+
+                if r["category_id"] == CAT_STRING:
+                    # Pour STRING : mapper count/model vers custom fields
+                    custom_fields["nb_modules"] = str(r.get("count") or "")
+                    custom_fields["module_model"] = r.get("model") or ""
+                    custom_fields["module_brand"] = r.get("brand") or ""
+                    # MPPT index : extraire du vcom_device_id si possible
+                    vdid = r.get("vcom_device_id", "")
+                    try:
+                        mppt_idx = vdid.split("-MPPT-", 1)[1] if "-MPPT-" in vdid else ""
+                    except Exception:
+                        mppt_idx = ""
+                    custom_fields["mppt_idx"] = mppt_idx
+
+                elif r["category_id"] == CAT_INVERTER:
+                    # Pour INVERTER : model dans custom field "Modèle"
+                    custom_fields["Modèle"] = r.get("model") or ""
+
+                elif r["category_id"] == CAT_MODULE:
+                    # Pour MODULE : model dans custom field "Modèle"
+                    custom_fields["Modèle"] = r.get("model") or ""
+
+                # Créer nouvel Equipment avec custom_fields
+                enriched_eq = Equipment(
+                    **{**base_eq.to_dict(), "_custom_fields": custom_fields}
+                )
+
+                # Enrichir avec site keys
+                final_eq = self._enrich_equipment_with_site_keys(enriched_eq)
+                equips[r.get("serial_number")] = final_eq
+
             if len(page) < step:
                 break        # dernière page atteinte
             from_row += step
@@ -222,6 +256,7 @@ class SupabaseAdapter:
                 .data or []
             )
             for r in page:
+                # Construction de base
                 base_eq = Equipment(
                     site_id=r["site_id"],
                     category_id=r["category_id"],
@@ -235,7 +270,40 @@ class SupabaseAdapter:
                     parent_id=r.get("parent_id"),
                     yuman_material_id=r.get("yuman_material_id"),
                 )
-                equips[r["serial_number"]] = self._enrich_equipment_with_site_keys(base_eq)
+
+                # NOUVEAU : Peupler _custom_fields selon la catégorie
+                custom_fields = {}
+
+                if r["category_id"] == CAT_STRING:
+                    # Pour STRING : mapper count/model vers custom fields
+                    custom_fields["nb_modules"] = str(r.get("count") or "")
+                    custom_fields["module_model"] = r.get("model") or ""
+                    custom_fields["module_brand"] = r.get("brand") or ""
+                    # MPPT index : extraire du vcom_device_id si possible
+                    vdid = r.get("vcom_device_id", "")
+                    try:
+                        mppt_idx = vdid.split("-MPPT-", 1)[1] if "-MPPT-" in vdid else ""
+                    except Exception:
+                        mppt_idx = ""
+                    custom_fields["mppt_idx"] = mppt_idx
+
+                elif r["category_id"] == CAT_INVERTER:
+                    # Pour INVERTER : model dans custom field "Modèle"
+                    custom_fields["Modèle"] = r.get("model") or ""
+
+                elif r["category_id"] == CAT_MODULE:
+                    # Pour MODULE : model dans custom field "Modèle"
+                    custom_fields["Modèle"] = r.get("model") or ""
+
+                # Créer nouvel Equipment avec custom_fields
+                enriched_eq = Equipment(
+                    **{**base_eq.to_dict(), "_custom_fields": custom_fields}
+                )
+
+                # Enrichir avec site keys
+                final_eq = self._enrich_equipment_with_site_keys(enriched_eq)
+                equips[r["serial_number"]] = final_eq
+
             if len(page) < step:
                 break        # dernière page atteinte
             from_row += step

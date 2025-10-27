@@ -97,6 +97,9 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
                 brand           = p.get("vendor"),
                 model           = p.get("model"),
                 count           = p.get("count"),
+                _custom_fields  = {
+                    "Modèle": p.get("model") or "",
+                }
             )
             equips[mod.key()] = mod
 
@@ -115,6 +118,9 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
                 brand           = det_inv.get("vendor"),
                 model           = det_inv.get("model"),
                 serial_number   = inv.get("serial"),
+                _custom_fields  = {
+                    "Modèle": det_inv.get("model") or "",
+                }
             )
             equips[inv_eq.key()] = inv_eq
 
@@ -160,6 +166,12 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
                         serial_number   = vdid_unique,
                         count           = inp["modulesPerString"],
                         parent_id       = parent_vcom,
+                        _custom_fields  = {
+                            "mppt_idx": idx_str,
+                            "nb_modules": str(inp["modulesPerString"]),
+                            "module_brand": inp["module"].get("vendor") or "",
+                            "module_model": inp["module"].get("model") or "",
+                        }
                     )
                     equips[str_eq.key()] = str_eq
 

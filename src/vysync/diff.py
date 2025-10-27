@@ -119,75 +119,14 @@ def _equals(a: T, b: T, ignore_fields: Optional[set[str]] = None) -> bool:
     return a == b
 
 def _equip_equals(a: Equipment, b: Equipment, ignore_fields: Optional[Set[str]] = None) -> bool:
-    da = a.to_dict()
-    db = b.to_dict()
+    """
+    Comparaison d'équipements - délègue à Equipment.__eq__().
+    Cette fonction est conservée pour compatibilité.
 
-    # Retirer les champs à ignorer
-    if ignore_fields:
-        for field in ignore_fields:
-            da.pop(field, None)
-            db.pop(field, None)
-
-    # ✅ RÈGLE MÉTIER : Si target (b/db) a None, ignorer ce champ dans la comparaison
-    # On copie la valeur de current (a/da) pour que la comparaison retourne True
-    for key in list(db.keys()):
-        if db[key] is None and key in da:
-            db[key] = da[key]  # ← considérer qu'il n'y a pas de changement
-
-    # Normalisation
-    for d in (da, db):
-        for key in ("brand", "model", "serial_number", "parent_id"):
-            if d.get(key) is None:
-                d[key] = ""
-            elif isinstance(d[key], str):
-                d[key] = d[key].strip()
-        d["count"] = int(d.get("count") or 0)
-
-    cat = da.get("category_id")
-
-    if cat == CAT_MODULE:
-        return (
-            da["brand"].lower()       == db["brand"].lower() and
-            da["model"].lower()       == db["model"].lower() and
-            da["count"]               == db["count"] and
-            da["serial_number"]       == db["serial_number"]
-        )
-    elif cat == CAT_STRING:
-        # Remap du parent_id VCOM → Yuman
-        pb = db.get("parent_id","")
-        db["parent_id"] = _parent_map.get(pb, pb)
-        return (
-            da["name"]                == db["name"] and
-            da["brand"].lower()       == db["brand"].lower() and
-            da["model"].lower()       == db["model"].lower() and
-            da["count"]               == db["count"] and
-            da["name"]                == db["name"] and
-            da["vcom_device_id"]      == db["vcom_device_id"] and
-            da["parent_id"]           == db["parent_id"] and
-            da["serial_number"]       == db["serial_number"]
-        )
-    elif cat == CAT_INVERTER:
-        return (
-            da["name"]                == db["name"] and
-            da["brand"].lower()       == db["brand"].lower() and
-            da["model"].lower()       == db["model"].lower() and
-            da["serial_number"]       == db["serial_number"] and
-            da["vcom_device_id"]      == db["vcom_device_id"] 
-        )
-    elif cat == CAT_CENTRALE:
-        return (
-            da["serial_number"]                == db["serial_number"]            
-        )
-    elif cat == CAT_SIM:
-        return (
-            da["name"]                == db["name"] and
-            da["brand"].lower()       == db["brand"].lower() and
-            da["model"].lower()       == db["model"].lower() and
-            da["serial_number"]       == db["serial_number"] and
-            da["vcom_device_id"]      == db["vcom_device_id"] 
-        )
-    else:
-        return da == db
+    Note: ignore_fields n'est plus utilisé car la logique de comparaison
+    est maintenant dans Equipment.__eq__() qui compare uniquement les champs synchronisables.
+    """
+    return a == b
 
 
 
