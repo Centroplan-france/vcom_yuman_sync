@@ -50,6 +50,10 @@ STRING_FIELDS = {
     "marque du module": 16022,
     "model de module":  16023,
 }
+SIM_FIELDS = {
+    "N° carte SIM": 17940,
+    "Opérateur":    14653,
+}
 CUSTOM_INVERTER_ID = "Inverter ID (Vcom)"
 
 # ───────────────────────────── Adapter Yuman ───────────────────────────
@@ -236,9 +240,21 @@ class YumanAdapter:
             module_model = (raw_fields.get("model de module")  or "").strip()
 
             name   = (m.get("name")          or "").strip()
-            brand  = (m.get("brand")         or "").strip()
-            model  = (raw_fields.get("Modèle")         or "").strip()
             serial = (m.get("serial_number") or "").strip()
+
+            # --- Mapping des champs selon la catégorie ---
+            # Pour STRING : brand/model viennent des custom fields
+            if cat_id == CAT_STRING:
+                brand = module_brand
+                model = module_model
+            # Pour SIM : brand/model viennent des custom fields spécifiques
+            elif cat_id == CAT_SIM:
+                brand = (raw_fields.get("Opérateur") or "").strip()
+                model = (raw_fields.get("N° carte SIM") or "").strip()
+            # Pour INVERTER et MODULE : model vient du custom field "Modèle", brand du champ standard
+            else:
+                brand = (m.get("brand") or "").strip()
+                model = (raw_fields.get("Modèle") or "").strip()
 
             # ---------------------------------------------------------
             # 3) Construction de l'objet Equipment
@@ -464,35 +480,40 @@ class YumanAdapter:
                             e.vcom_system_key, e.vcom_device_id)
                 continue
 
+            # Payload de base (toutes catégories)
             payload: Dict[str, Any] = {
                 "site_id":       site_row["yuman_site_id"],
                 "category_id":   e.category_id,
                 "name":          e.name,
-                "brand":         e.brand,
                 "serial_number": e.serial_number or e.vcom_device_id,
             }
+
+            # brand : uniquement pour INVERTER et MODULE (champ standard)
+            # Pour STRING et SIM : brand est dans custom fields
+            if e.category_id in (CAT_INVERTER, CAT_MODULE):
+                payload["brand"] = e.brand
+
             fields: List[Dict[str, Any]] = []
 
-            # modèle générique
-            if e.model:
-                fields.append({"blueprint_id": BP_MODEL, "value": e.model})
-
-            # MODULE spécifique (compte, marque, modèle)
+            # -------- CAT_SPÉCIFIQUES --------
             if e.category_id == CAT_MODULE:
-                # pas de champs custom pour l’instant : payload suffit
-                if e.count is not None:
-                    payload["count"] = e.count
+                # MODULE : model → custom field "Modèle"
+                if e.model:
+                    fields.append({"blueprint_id": BP_MODEL, "value": e.model})
 
-            # INVERTER spécifique
-            if e.category_id == CAT_INVERTER:
+            elif e.category_id == CAT_INVERTER:
+                # INVERTER : model → custom field "Modèle"
+                if e.model:
+                    fields.append({"blueprint_id": BP_MODEL, "value": e.model})
+                # Inverter ID (Vcom)
                 fields.append({
                     "blueprint_id": BP_INVERTER_ID,
                     "name": "Inverter ID (Vcom)",
                     "value": e.vcom_device_id
                 })
 
-            # STRING spécifique
-            if e.category_id == CAT_STRING:
+            elif e.category_id == CAT_STRING:
+                # STRING : brand/model/count → custom fields
                 try:
                     mppt_idx = e.vcom_device_id.split("-MPPT-", 1)[1]
                 except Exception:
@@ -500,12 +521,19 @@ class YumanAdapter:
                 fields.extend([
                     {"blueprint_id": BP_MPPT_IDX,     "value": mppt_idx},
                     {"blueprint_id": BP_NB_MODULES,   "value": str(e.count or "")},
-                    {"blueprint_id": BP_MODULE_BRAND, "value": e.brand},
-                    {"blueprint_id": BP_MODULE_MODEL, "value": e.model},
+                    {"blueprint_id": BP_MODULE_BRAND, "value": e.brand or ""},
+                    {"blueprint_id": BP_MODULE_MODEL, "value": e.model or ""},
                 ])
                 # parent → onduleur
                 if e.parent_id and (pid := id_by_vcom.get(e.parent_id)):
                     payload["parent_id"] = pid
+
+            elif e.category_id == CAT_SIM:
+                # SIM : brand → "Opérateur", model → "N° carte SIM" (custom fields)
+                if e.model:
+                    fields.append({"blueprint_id": SIM_FIELDS["N° carte SIM"], "value": e.model})
+                if e.brand:
+                    fields.append({"blueprint_id": SIM_FIELDS["Opérateur"], "value": e.brand})
 
             # appliquer les champs custom
             if fields:
@@ -565,18 +593,25 @@ class YumanAdapter:
             fields_patch: List[Dict[str, Any]] = []
 
             # -------- CHAMPS COMMUNS (toutes catégories) --------
+            # ✅ Champs modifiables via API Yuman : serial_number, brand (selon catégorie)
+            # ❌ Champs NON-modifiables : name, count, model (selon catégorie)
+
             def _set(attr: str, target: Dict[str, Any] = payload):
                 ov, nv = getattr(old, attr), getattr(new, attr)
                 if (ov or "") != (nv or "") and nv is not None:
                     target[attr] = nv
 
-            _set("name")
-            _set("brand")
+            # serial_number : toujours modifiable
             _set("serial_number")
-            _set("count")
+
+            # brand : modifiable uniquement pour INVERTER et MODULE (champ standard)
+            # Pour STRING et SIM : brand est dans custom fields
+            if old.category_id in (CAT_INVERTER, CAT_MODULE):
+                _set("brand")
 
             # -------- CAT_SPÉCIFIQUES --------
             if old.category_id == CAT_INVERTER:
+                # INVERTER : model → custom field "Modèle"
                 if old.vcom_device_id != new.vcom_device_id:
                     fields_patch.append({"blueprint_id": BP_INVERTER_ID,
                                         "value": new.vcom_device_id})
@@ -584,17 +619,20 @@ class YumanAdapter:
                     fields_patch.append({"blueprint_id": BP_MODEL,
                                         "value": new.model})
 
-            if old.category_id == CAT_MODULE:
+            elif old.category_id == CAT_MODULE:
+                # MODULE : model → custom field "Modèle"
                 if old.model != new.model:
                     fields_patch.append({"blueprint_id": BP_MODEL,
                                         "value": new.model})
-                    
-            if old.category_id == CAT_STRING:
-                # parent
+
+            elif old.category_id == CAT_STRING:
+                # STRING : brand/model/count → custom fields
+                # parent_id : modifiable uniquement à la création
                 if new.parent_id and old.parent_id != new.parent_id:
                     parent_mat = id_by_vcom.get(new.parent_id)
                     if parent_mat:
                         payload["parent_id"] = parent_mat
+
                 # champs custom
                 def _maybe(bp, ov, nv):
                     if (ov or "") != (nv or ""):
@@ -615,8 +653,16 @@ class YumanAdapter:
                 _maybe(BP_MODULE_BRAND, old_bmod,   new.brand or "")
                 _maybe(BP_MODULE_MODEL, old_mmodel, new.model or "")
 
-            # aucun champ custom particulier pour CAT_MODULE / CAT_SIM /
-            # CAT_CENTRALE ; le payload générique suffit.
+            elif old.category_id == CAT_SIM:
+                # SIM : brand → "Opérateur", model → "N° carte SIM" (custom fields)
+                if (old.model or "") != (new.model or ""):
+                    fields_patch.append({"blueprint_id": SIM_FIELDS["N° carte SIM"],
+                                        "value": new.model or ""})
+                if (old.brand or "") != (new.brand or ""):
+                    fields_patch.append({"blueprint_id": SIM_FIELDS["Opérateur"],
+                                        "value": new.brand or ""})
+
+            # CAT_CENTRALE : uniquement serial_number (déjà géré ci-dessus)
 
             if fields_patch:
                 payload["fields"] = fields_patch
