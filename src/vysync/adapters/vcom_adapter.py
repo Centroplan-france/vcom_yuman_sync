@@ -171,7 +171,7 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
                         model           = inp["module"].get("model"),
                         serial_number   = vdid_unique,
                         count           = inp["modulesPerString"],
-                        parent_id       = parent_vcom,
+                        parent_id       = inv.get("serial"),
                     )
                     equips[str_eq.key()] = str_eq
 
