@@ -13,10 +13,8 @@ from typing import Any, Dict, Optional
 @dataclass(frozen=True)
 class Site:
     name: str
-    id: Optional[int] = None   
-    yuman_site_id: Optional[int] = None
-    vcom_system_key: Optional[str] = None
-    client_map_id: Optional[int] = None 
+    id: Optional[int] = None
+    client_map_id: Optional[int] = None
     code: Optional[int] = None                      # code yuman
     latitude: Optional[float] = None
     longitude: Optional[float] = None
@@ -26,11 +24,24 @@ class Site:
     address: Optional[str] = None
     aldi_id: Optional[str] = None                   # "ALDI ID"
     aldi_store_id: Optional[str] = None             # "ID magasin (n° interne Aldi)"
-    project_number_cp: Optional[str] = None         # "Project number (Centroplan ID)"      
-    ignore_site:   bool = False  
-        
-    def key(self) -> str:
-        return self.vcom_system_key
+    project_number_cp: Optional[str] = None         # "Project number (Centroplan ID)"
+    ignore_site:   bool = False
+
+    def key(self) -> Optional[int]:
+        """Retourne l'id Supabase (clé unique du site)"""
+        return self.id
+
+    def get_vcom_system_key(self, sb_adapter) -> Optional[str]:
+        """Récupère le vcom_system_key via id depuis le cache sites_mapping."""
+        if self.id is None:
+            return None
+        return sb_adapter._get_vcom_key_by_site_id(self.id)
+
+    def get_yuman_site_id(self, sb_adapter) -> Optional[int]:
+        """Récupère le yuman_site_id via id depuis le cache sites_mapping."""
+        if self.id is None:
+            return None
+        return sb_adapter._get_yuman_site_id_by_site_id(self.id)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

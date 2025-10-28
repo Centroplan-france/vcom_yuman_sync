@@ -139,7 +139,7 @@ class YumanAdapter:
   
           # --- Construction de l’objet Site
           site_obj = Site(
-              vcom_system_key = vcom_key,
+              id              = self.sb._map_yid_to_id.get(yuman_site_id),
               name            = s.get("name"),
               address         = s.get("address"),
               commission_date = commission_iso,
@@ -149,15 +149,13 @@ class YumanAdapter:
               ),
               latitude        = s.get("latitude"),
               longitude       = s.get("longitude"),
-              yuman_site_id   = s["id"],
               aldi_id           = aldi_id,
               aldi_store_id     = aldi_store_id,
               project_number_cp = project_number_cp,
           )
   
           # --- Choix de la clé du dict
-          key = yuman_site_id
-          sites[key] = site_obj
+          sites[yuman_site_id] = site_obj
   
       logger.debug("[YUMAN] snapshot: %d sites",
                    len(sites),
@@ -316,7 +314,7 @@ class YumanAdapter:
                     {
                         "blueprint_id": SITE_FIELDS["System Key (Vcom ID)"],
                         "name":  "System Key (Vcom ID)",
-                        "value": s.vcom_system_key,
+                        "value": s.get_vcom_system_key(self.sb),
                     },
                     {
                         "blueprint_id": SITE_FIELDS["Nominal Power (kWc)"],
@@ -333,10 +331,11 @@ class YumanAdapter:
             logger.debug("[YUMAN] create_site payload=%s", payload)
             new_site = self.yc.create_site(payload)
 
-            # propager l’ID en DB
+            # propager l'ID en DB
+            vcom_key = s.get_vcom_system_key(self.sb)
             self.sb.sb.table("sites_mapping") \
                 .update({"yuman_site_id": new_site["id"]}) \
-                .eq("vcom_system_key", s.vcom_system_key) \
+                .eq("vcom_system_key", vcom_key) \
                 .execute()
             self._ensure_centrale(new_site["id"])
 
@@ -364,11 +363,13 @@ class YumanAdapter:
                 site_patch["client_id"] = new_client_id
 
             # System Key
-            if old.vcom_system_key != new.vcom_system_key and new.vcom_system_key:
+            old_vcom = old.get_vcom_system_key(self.sb)
+            new_vcom = new.get_vcom_system_key(self.sb)
+            if old_vcom != new_vcom and new_vcom:
                 fields_patch.append({
                     "blueprint_id": SITE_FIELDS["System Key (Vcom ID)"],
                     "name": "System Key (Vcom ID)",
-                    "value": new.vcom_system_key,
+                    "value": new_vcom,
                 })
 
             # Nominal Power
@@ -395,10 +396,13 @@ class YumanAdapter:
                 self.yc.update_site(old.yuman_site_id, site_patch)
 
             # back‑fill Yuman ID si besoin
-            if new.yuman_site_id is None and old.yuman_site_id:
+            old_yuman_id = old.get_yuman_site_id(self.sb)
+            new_yuman_id = new.get_yuman_site_id(self.sb)
+            new_vcom_key = new.get_vcom_system_key(self.sb)
+            if new_yuman_id is None and old_yuman_id:
                 self.sb.sb.table("sites_mapping") \
-                    .update({"yuman_site_id": old.yuman_site_id}) \
-                    .eq("vcom_system_key", new.vcom_system_key) \
+                    .update({"yuman_site_id": old_yuman_id}) \
+                    .eq("vcom_system_key", new_vcom_key) \
                     .execute()
 
     # ------------------------------------------------------------------

@@ -112,7 +112,7 @@ class SupabaseAdapter:
             if not r.get("vcom_system_key"):
                 continue
             sites[r["vcom_system_key"]] = Site(
-                vcom_system_key=r["vcom_system_key"],
+                id=r["id"],
                 name=r.get("name") or r["vcom_system_key"],
                 latitude=r.get("latitude"),
                 longitude=r.get("longitude"),
@@ -120,7 +120,6 @@ class SupabaseAdapter:
                 site_area=r.get("site_area"),
                 commission_date=r.get("commission_date"),
                 address=r.get("address"),
-                yuman_site_id=r.get("yuman_site_id"),
                 client_map_id=r.get("client_map_id"),
                 ignore_site=bool(r.get("ignore_site")),
             )
@@ -134,15 +133,13 @@ class SupabaseAdapter:
             if not r.get("yuman_site_id"):
                 continue
             sites[r["yuman_site_id"]] = Site(
-                id=r["id"],  
-                vcom_system_key=r["vcom_system_key"],
-                name=r.get("name") or r["vcom_system_key"],
+                id=r["id"],
+                name=r.get("name") or r.get("vcom_system_key") or str(r.get("yuman_site_id")),
                 latitude=r.get("latitude"),
                 longitude=r.get("longitude"),
                 nominal_power=r.get("nominal_power"),
                 commission_date=r.get("commission_date"),
                 address=r.get("address"),
-                yuman_site_id=r.get("yuman_site_id"),
                 client_map_id=r.get("client_map_id"),
                 project_number_cp=r.get("project_number_cp"),
                 aldi_store_id=r.get("aldi_store_id"),
@@ -237,13 +234,14 @@ class SupabaseAdapter:
         """Insère/maj les sites.  
         `patch` doit exposer `.add` et `.update` comme itérables."""
         for s in patch.add:
-            logger.debug("[SB] INSERT site %s", s.key())
+            vcom_key = s.get_vcom_system_key(self) if s.id else "new_site"
+            logger.debug("[SB] INSERT site %s (id=%s)", vcom_key, s.id)
             row = s.to_dict()
             row["created_at"] = _now_iso()        # horodatage UTC
             row.pop("id", None)
             self.sb.table(SITE_TABLE).insert([row]).execute()
 
-        IMMUTABLE_COLS = {"vcom_system_key", "created_at", "ignore_site"}
+        IMMUTABLE_COLS = {"created_at", "ignore_site"}
 
         for old, new in patch.update:
             # Construire le dict des champs à updater
@@ -251,14 +249,15 @@ class SupabaseAdapter:
                 k: v
                 for k, v in new.to_dict().items()
                 if v is not None               # on ignore les None
-                and k not in IMMUTABLE_COLS  # on n’override pas les colonnes immuables
+                and k not in IMMUTABLE_COLS  # on n'override pas les colonnes immuables
             }
             if upd:
                 # Si yuman_site_id est absent dans VCOM, il ne sera pas dans upd
-                logger.debug("Updating sites_mapping %s → %s", old.vcom_system_key, upd)
+                old_vcom_key = old.get_vcom_system_key(self)
+                logger.debug("Updating sites_mapping id=%s (vcom_key=%s) → %s", old.id, old_vcom_key, upd)
                 self.sb.table("sites_mapping") \
                     .update(upd) \
-                    .eq("vcom_system_key", old.vcom_system_key) \
+                    .eq("id", old.id) \
                     .execute()
 
         # Le cache doit refléter les nouveaux sites avant d’insérer des équipements

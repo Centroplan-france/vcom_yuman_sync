@@ -54,7 +54,7 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
 
         # --- Site ----------------------------------------------------------------
         site = Site(
-            vcom_system_key = key,
+            id              = vcom_to_site_id.get(key) if vcom_to_site_id else None,
             name            = sys.get("name") or key,
             latitude        = det.get("coordinates", {}).get("latitude"),
             longitude       = det.get("coordinates", {}).get("longitude"),
@@ -63,7 +63,7 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
             address         = build_address(det.get("address", {})),
             site_area       = tech.get("siteArea"),
         )
-        sites[site.key()] = site
+        sites[key] = site  # Indexé par vcom_system_key (variable locale 'key')
 
         # Résoudre site_id via le mapping
         site_id = vcom_to_site_id.get(key) if vcom_to_site_id else None
