@@ -175,11 +175,11 @@ def sync_full(
     # Si --site-key spécifié, filtrer APRÈS le fetch
     if site_key:
         v_sites = {k: s for k, s in v_sites.items() if k == site_key}
-        v_equips = {k: e for k, e in v_equips.items() if e.vcom_system_key == site_key}
-        
+        v_equips = {k: e for k, e in v_equips.items() if e.get_vcom_system_key(sb) == site_key}
+
         # Filtrer aussi la DB pour ne comparer que ce site
         db_sites = {k: s for k, s in db_sites.items() if k == site_key}
-        db_equips = {k: e for k, e in db_equips.items() if e.vcom_system_key == site_key}
+        db_equips = {k: e for k, e in db_equips.items() if e.get_vcom_system_key(sb) == site_key}
 
     # Diff & patch
     patch_sites = diff_entities(

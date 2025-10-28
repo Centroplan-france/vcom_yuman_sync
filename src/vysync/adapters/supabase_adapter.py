@@ -85,24 +85,19 @@ class SupabaseAdapter:
             return None
         return self._map_yid_to_id.get(yuman_site_id)
 
-    def _enrich_equipment_with_vcom_key(self, equipment: Equipment) -> Equipment:
-        """Reconstruit vcom_system_key depuis site_id via le cache."""
-        if equipment.site_id is None:
-            return equipment
-
-        # Trouver le vcom_system_key correspondant
-        vcom_key = None
+    def _get_vcom_key_by_site_id(self, site_id: int) -> str | None:
+        """Retourne le vcom_system_key via site_id."""
         for key, sid in self._map_vcom_to_id.items():
-            if sid == equipment.site_id:
-                vcom_key = key
-                break
+            if sid == site_id:
+                return key
+        return None
 
-        # Reconstruire l'objet avec le vcom_system_key
-        if vcom_key and vcom_key != equipment.vcom_system_key:
-            return Equipment(
-                **{**equipment.to_dict(), "vcom_system_key": vcom_key}
-            )
-        return equipment
+    def _get_yuman_site_id_by_site_id(self, site_id: int) -> int | None:
+        """Retourne le yuman_site_id via site_id."""
+        for yid, sid in self._map_yid_to_id.items():
+            if sid == site_id:
+                return yid
+        return None
 
 
 
@@ -184,7 +179,7 @@ class SupabaseAdapter:
                 or []
             )
             for r in page:
-                base_eq = Equipment(
+                eq = Equipment(
                     site_id=r["site_id"],
                     category_id=r["category_id"],
                     eq_type=r["eq_type"],
@@ -197,7 +192,7 @@ class SupabaseAdapter:
                     parent_id=r.get("parent_id"),
                     yuman_material_id=r.get("yuman_material_id"),
                 )
-                equips[r.get("serial_number")] = self._enrich_equipment_with_vcom_key(base_eq)
+                equips[r.get("serial_number")] = eq
             if len(page) < step:
                 break        # dernière page atteinte
             from_row += step
@@ -217,7 +212,7 @@ class SupabaseAdapter:
                 .data or []
             )
             for r in page:
-                base_eq = Equipment(
+                eq = Equipment(
                     site_id=r["site_id"],
                     category_id=r["category_id"],
                     eq_type=r["eq_type"],
@@ -230,7 +225,7 @@ class SupabaseAdapter:
                     parent_id=r.get("parent_id"),
                     yuman_material_id=r.get("yuman_material_id"),
                 )
-                equips[r["serial_number"]] = self._enrich_equipment_with_vcom_key(base_eq)
+                equips[r["serial_number"]] = eq
             if len(page) < step:
                 break        # dernière page atteinte
             from_row += step
@@ -285,18 +280,17 @@ class SupabaseAdapter:
         if patch.add:
             upserts = []
             for e in patch.add:
-                site_id = self._site_id(e.vcom_system_key)
+                site_id = e.site_id
                 if site_id is None:
-                    logger.error("[SB] site %s introuvable → skip ADD %s",
-                                e.vcom_system_key, e.vcom_device_id)
+                    logger.error("[SB] site_id manquant → skip ADD %s", e.vcom_device_id)
                     continue
 
                 row = e.to_db_dict()
                 # normalisation serial
                 row["serial_number"] = _norm_serial(row.get("serial_number"))
                 if not row["serial_number"]:
-                    logger.error("[SB] ADD SKIPPED (serial vide) cat=%s vcom=%s mid=%s",
-                                e.category_id, e.vcom_system_key, e.yuman_material_id)
+                    logger.error("[SB] ADD SKIPPED (serial vide) cat=%s site_id=%s mid=%s",
+                                e.category_id, e.site_id, e.yuman_material_id)
                     continue
 
                 row.update(
@@ -324,7 +318,7 @@ class SupabaseAdapter:
             payload = {}
             for k, v in e_new.to_db_dict().items():
                 # Skip les champs exclus
-                if k in {"vcom_device_id", "vcom_system_key"}:
+                if k in {"vcom_device_id"}:
                     continue
                 # Skip les champs non valides
                 if k not in VALID_COLS:
@@ -342,10 +336,9 @@ class SupabaseAdapter:
             if "serial_number" in payload:
                 payload["serial_number"] = _norm_serial(payload["serial_number"])
 
-            # site_id (si résoluble et changé)
-            site_id = self._site_id(e_new.vcom_system_key)
-            if site_id is not None and (not e_old or site_id != e_old.site_id):
-                payload["site_id"] = site_id
+            # site_id (si présent et changé)
+            if e_new.site_id is not None and (not e_old or e_new.site_id != e_old.site_id):
+                payload["site_id"] = e_new.site_id
 
             if not payload:
                 logger.debug("[SB] UPDATE SKIPPED (aucun changement): serial=%s mid=%s",
@@ -392,8 +385,8 @@ class SupabaseAdapter:
                                        e_new.yuman_material_id, len(res.data))
 
             if not updated:
-                updates_logger.error("❌ UPDATE FAILED (0 rows): serial=%s mid=%s vcom=%s | Payload: %s",
-                                    serial_new, e_new.yuman_material_id, e_new.vcom_system_key, payload)
+                updates_logger.error("❌ UPDATE FAILED (0 rows): serial=%s mid=%s site_id=%s | Payload: %s",
+                                    serial_new, e_new.yuman_material_id, e_new.site_id, payload)
                 # Log aussi en console pour visibilité
                 logger.warning("UPDATE échoué pour serial=%s (voir updates.log pour détails)", serial_new)
 
@@ -510,8 +503,8 @@ class SupabaseAdapter:
             row["serial_number"] = _norm_serial(row.get("serial_number"))
 
             if not row["serial_number"]:
-                logger.error("[SB] SKIP ADD (serial vide) cat=%s vcom=%s mid=%s",
-                            e.category_id, e.vcom_system_key, e.yuman_material_id)
+                logger.error("[SB] SKIP ADD (serial vide) cat=%s site_id=%s mid=%s",
+                            e.category_id, e.site_id, e.yuman_material_id)
                 continue
 
             # dédoublonner au sein du batch par serial
@@ -547,7 +540,7 @@ class SupabaseAdapter:
             payload = {}
             for k, v in e.to_db_dict().items():
                 # Skip les champs exclus
-                if k in {"vcom_device_id", "yuman_material_id", "vcom_system_key"}:
+                if k in {"vcom_device_id", "yuman_material_id"}:
                     continue
                 # Skip les champs non valides
                 if k not in VALID:
@@ -630,7 +623,7 @@ class SupabaseAdapter:
                                        e.vcom_device_id, len(res.data))
 
             if not updated:
-                updates_logger.error("❌ UPDATE FAILED (0 rows): serial=%s mid=%s vcom=%s | Payload: %s",
-                                    serial_new, e.yuman_material_id, e.vcom_system_key, payload)
+                updates_logger.error("❌ UPDATE FAILED (0 rows): serial=%s mid=%s site_id=%s | Payload: %s",
+                                    serial_new, e.yuman_material_id, e.site_id, payload)
                 # Log aussi en console pour visibilité
                 logger.warning("UPDATE échoué pour serial=%s (voir updates.log pour détails)", serial_new)

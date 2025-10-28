@@ -42,7 +42,6 @@ class Equipment:
     eq_type: str
     name: str
     site_id: Optional[int] | None = None
-    vcom_system_key: Optional[str] = None
     yuman_material_id: Optional[int] = None
     vcom_device_id: Optional[str] = None
     brand: Optional[str] = None
@@ -50,12 +49,25 @@ class Equipment:
     serial_number: Optional[str] = None
     count: Optional[int] = None                # ex-string_count ?
     parent_id: Optional[str] = None
-    
+
 
 
     # --- clé « métier » -----------------------------------
     def key(self) -> str:
         return self.serial_number
+
+    # --- getters pour résolution via site_id -----------------------------------
+    def get_vcom_system_key(self, sb_adapter) -> Optional[str]:
+        """Récupère le vcom_system_key via site_id depuis le cache sites_mapping."""
+        if self.site_id is None:
+            return None
+        return sb_adapter._get_vcom_key_by_site_id(self.site_id)
+
+    def get_yuman_site_id(self, sb_adapter) -> Optional[int]:
+        """Récupère le yuman_site_id via site_id depuis le cache sites_mapping."""
+        if self.site_id is None:
+            return None
+        return sb_adapter._get_yuman_site_id_by_site_id(self.site_id)
 
     # --- sérialisation -----------------------------------
     def to_dict(self) -> Dict[str, Any]:
@@ -63,10 +75,8 @@ class Equipment:
         return asdict(self)
 
     def to_db_dict(self) -> Dict[str, Any]:
-        """Sérialisation pour persistance Supabase (exclut les colonnes supprimées)."""
-        d = asdict(self)
-        d.pop("vcom_system_key", None)
-        return d
+        """Sérialisation pour persistance Supabase."""
+        return asdict(self)
 
     # --- égalité (cohérente avec la doc-string) ---------- ②
     def __eq__(self, other: object) -> bool:
