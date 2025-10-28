@@ -173,20 +173,15 @@ class YumanAdapter:
         Récupère tous les matériels Yuman (modules, onduleurs, strings, SIM, etc.)
         et les normalise en objets `Equipment`.
 
-        • Clé du dictionnaire retourné : `yuman_material_id` (m["id"])
+        • Clé du dictionnaire retourné : `serial_number`
         • Chaque Equipment contient :
-            - `site_id`         : clé étrangère Supabase (résolue ici)
-            - `yuman_site_id`   : id du site côté Yuman
-            - `vcom_system_key` : si le site est déjà mappé à VCOM
+            - `site_id`         : clé étrangère Supabase (résolue via sites_mapping)
         """
         # -------------------------------------------------------------
-        # 1) Index rapide : yuman_site_id  ➜  (site_id, vcom_system_key)
+        # 1) Index rapide : yuman_site_id  ➜  site_id
+        #    Utilise le cache du sb_adapter pour avoir les bonnes correspondances
         # -------------------------------------------------------------
-        sites_by_yid: dict[int, tuple[int, str | None]] = {
-            s.yuman_site_id: (s.id, s.vcom_system_key)
-            for s in self.fetch_sites().values()
-            if s.yuman_site_id is not None
-        }
+        sites_by_yid: dict[int, int] = self.sb._map_yid_to_id.copy()
 
         equips: Dict[str, Equipment] = {}
 
@@ -194,11 +189,10 @@ class YumanAdapter:
         # 2) Parcours de tous les matériels Yuman
         # -------------------------------------------------------------
         for m in self.yc.list_materials(embed="fields,site"):
-            site_info = sites_by_yid.get(m["site_id"])
-            if site_info is None:          # site non importé / ignoré
+            site_id = sites_by_yid.get(m["site_id"])
+            if site_id is None:          # site non importé / ignoré
                 continue
 
-            site_id, vcom_key = site_info
             cat_id = m["category_id"]
 
             # --- champs personnalisés --------------------------------
@@ -213,7 +207,9 @@ class YumanAdapter:
             elif cat_id == CAT_STRING:
                 vdid = m.get("serial_number") or m["name"]
             elif cat_id == CAT_MODULE:
-                vdid = f"MODULES-{vcom_key or 'UNKNOWN'}"
+                # Pour les modules, on ne peut pas reconstruire le vcom_device_id sans vcom_system_key
+                # On utilise le serial_number si disponible
+                vdid = m.get("serial_number") or m["name"]
             else:
                 vdid = m.get("serial_number") or m["name"]
 
@@ -261,8 +257,6 @@ class YumanAdapter:
             # ---------------------------------------------------------
             equip = Equipment(
                 site_id          = site_id,          # clé étrangère Supabase
-                yuman_site_id    = m["site_id"],     # id Yuman du site
-                vcom_system_key  = vcom_key,         # peut être None
                 category_id      = cat_id,
                 eq_type          = eq_type,
                 vcom_device_id   = vdid.strip(),
@@ -466,23 +460,17 @@ class YumanAdapter:
 
         # ───────────────────────── INSERTIONS ──────────────────────────── #
         for e in sorted(patch.add, key=lambda x: _ORDER.get(x.category_id, 99)):
-            # 3.1 mapping site
-            site_row = (
-                self.sb.sb.table("sites_mapping")
-                .select("yuman_site_id")
-                .eq("vcom_system_key", e.vcom_system_key)
-                .single()
-                .execute()
-                .data
-            )
-            if not site_row or not site_row["yuman_site_id"]:
+            # 3.1 Résoudre yuman_site_id via site_id
+            yuman_site_id = e.get_yuman_site_id(self.sb) if e.site_id else None
+            if not yuman_site_id:
+                vcom_key = e.get_vcom_system_key(self.sb) if e.site_id else "unknown"
                 logger.warning("Site %s sans yuman_site_id → skip equip %s",
-                            e.vcom_system_key, e.vcom_device_id)
+                            vcom_key, e.vcom_device_id)
                 continue
 
             # Payload de base (toutes catégories)
             payload: Dict[str, Any] = {
-                "site_id":       site_row["yuman_site_id"],
+                "site_id":       yuman_site_id,
                 "category_id":   e.category_id,
                 "name":          e.name,
                 "serial_number": e.serial_number or e.vcom_device_id,
@@ -556,12 +544,11 @@ class YumanAdapter:
                     .eq("serial_number", e.serial_number) \
                     .execute()
             else:
-                site_id = self.sb._site_id(e.vcom_system_key) if e.vcom_system_key else e.site_id
-                if site_id:
+                if e.site_id:
                     self.sb.sb.table("equipments_mapping") \
                         .update({"yuman_material_id": mat["id"]}) \
                         .eq("vcom_device_id", e.vcom_device_id) \
-                        .eq("site_id", site_id) \
+                        .eq("site_id", e.site_id) \
                         .execute()
                 else:
                     logger.error("[YUMAN] Cannot update yuman_material_id: no serial, no site_id for vcom_device_id=%s",
@@ -578,12 +565,11 @@ class YumanAdapter:
                         .eq("serial_number", new.serial_number) \
                         .execute()
                 else:
-                    site_id = self.sb._site_id(new.vcom_system_key) if new.vcom_system_key else new.site_id
-                    if site_id:
+                    if new.site_id:
                         self.sb.sb.table("equipments_mapping") \
                             .update({"yuman_material_id": old.yuman_material_id}) \
                             .eq("vcom_device_id", new.vcom_device_id) \
-                            .eq("site_id", site_id) \
+                            .eq("site_id", new.site_id) \
                             .execute()
                     else:
                         logger.error("[YUMAN] Cannot update yuman_material_id: no serial, no site_id for vcom_device_id=%s",

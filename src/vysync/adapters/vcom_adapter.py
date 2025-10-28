@@ -20,17 +20,26 @@ def build_address(addr: Dict[str, Any]) -> str | None:
     parts = [addr.get("street"), f"{addr.get('postalCode', '')} {addr.get('city', '')}".strip()]
     return ", ".join(filter(None, parts)) or None
 
-from typing import Tuple, Dict
+from typing import Tuple, Dict, TYPE_CHECKING
 
-def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] | None = None) -> Tuple[Dict[str, Site], Dict[Tuple[str, str], Equipment]]:
+if TYPE_CHECKING:
+    from vysync.adapters.supabase_adapter import SupabaseAdapter
+
+def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] | None = None, sb_adapter: 'SupabaseAdapter | None' = None) -> Tuple[Dict[str, Site], Dict[Tuple[str, str], Equipment]]:
     """Retourne deux dictionnaires : ``sites`` et ``equips``.
 
     • Si ``vcom_system_key`` est fourni, on ne récupère que ce système.
-    • Les STRING PV sont inclus ; leur ``parent_vcom_id`` pointe vers l’onduleur
+    • Les STRING PV sont inclus ; leur ``parent_vcom_id`` pointe vers l'onduleur
       (utile plus tard pour déterminer la hiérarchie).
+    • Si ``sb_adapter`` est fourni, on utilise le cache sites_mapping pour construire site_id.
     """
     sites: Dict[str, Site] = {}
     equips: Dict[tuple[str, str], Equipment] = {}
+
+    # Créer un mapping vcom_system_key → site_id si sb_adapter disponible
+    vcom_to_site_id: Dict[str, int] = {}
+    if sb_adapter:
+        vcom_to_site_id = sb_adapter._map_vcom_to_id.copy()
 
     for sys in vc.get_systems():
         key = sys["key"]
@@ -56,15 +65,18 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
         )
         sites[site.key()] = site
 
+        # Résoudre site_id via le mapping
+        site_id = vcom_to_site_id.get(key) if vcom_to_site_id else None
+
         # -------------------------------------------------------------------------
         # SIM (category_id = 11382), eq_type = "sim"
         sim_sn = f"SIM-{key}"
         sim_eq = Equipment(
-            vcom_system_key = key,
+            site_id         = site_id,
             category_id     = 11382,            # SIM
             eq_type         = "sim",
-            vcom_device_id  = sim_sn,             # demandé 
-            serial_number   = sim_sn,             # demandé 
+            vcom_device_id  = sim_sn,             # demandé
+            serial_number   = sim_sn,             # demandé
             name            = "Carte SIM",
         )
         equips[sim_eq.key()] = sim_eq
@@ -73,7 +85,7 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
         # PLANT (category_id = 11441), eq_type = "plant"
         plant_sn = f"central-{key}"            # demandé : "Centrale-<vcom_system_key>"
         plant_eq = Equipment(
-            vcom_system_key = key,
+            site_id         = site_id,
             category_id     = 11441,            # PLANT
             eq_type         = "plant",
             vcom_device_id  = plant_sn,         # demandé
@@ -88,7 +100,7 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
         if panels:
             p = panels[0]
             mod = Equipment(
-                vcom_system_key = key,
+                site_id         = site_id,
                 category_id     = CAT_MODULE,
                 eq_type         = "module",
                 vcom_device_id  = f"MODULES-{key}",
@@ -107,7 +119,7 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
         for idx, inv in enumerate(inverters, start=1):
             det_inv = vc.get_inverter_details(key, inv["id"])
             inv_eq = Equipment(
-                vcom_system_key = key,
+                site_id         = site_id,
                 category_id     = CAT_INVERTER,
                 eq_type         = "inverter",
                 vcom_device_id  = inv["id"],
@@ -150,7 +162,7 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
                     vdid_unique = f"{vdid_base}-{key}"   # unicité inter-sites
 
                     str_eq = Equipment(
-                        vcom_system_key = key,
+                        site_id         = site_id,
                         category_id     = CAT_STRING,
                         eq_type         = "string_pv",
                         vcom_device_id  = vdid_unique,   # DB/Yuman → serial_number
