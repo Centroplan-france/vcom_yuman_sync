@@ -260,11 +260,105 @@ class SupabaseAdapter:
                     .eq("id", old.id) \
                     .execute()
 
-        # Le cache doit refléter les nouveaux sites avant d’insérer des équipements
+        # Le cache doit refléter les nouveaux sites avant d'insérer des équipements
         self._refresh_site_cache()
 
         # ------------------------ APPLY EQUIPS -----------------------------
 
+    def _update_single_equipment(
+        self,
+        e_old: Equipment | None,
+        e_new: Equipment,
+        valid_cols: set[str],
+    ) -> bool:
+        """
+        Met à jour un équipement en DB.
+
+        Détecte les changements, construit le payload, et exécute l'UPDATE
+        par serial_number avec fallback par yuman_material_id.
+
+        Args:
+            e_old: État actuel en DB (None si inconnu)
+            e_new: État cible (depuis VCOM)
+            valid_cols: Ensemble des colonnes autorisées
+
+        Returns:
+            True si au moins 1 ligne a été modifiée, False sinon
+        """
+        # NE METTRE À JOUR QUE LES CHAMPS QUI ONT CHANGÉ
+        payload = {}
+        for k, v in e_new.to_db_dict().items():
+            # Skip les champs non valides
+            if k not in valid_cols:
+                continue
+            # Skip si la valeur est None
+            if v is None:
+                continue
+
+            # AJOUTER SEULEMENT SI LA VALEUR A CHANGÉ
+            old_value = getattr(e_old, k, None) if e_old else None
+            if old_value != v:
+                payload[k] = v
+
+        # Normaliser serial côté payload si présent
+        if "serial_number" in payload:
+            payload["serial_number"] = _norm_serial(payload["serial_number"])
+
+        # site_id (si présent et changé)
+        if e_new.site_id is not None and (not e_old or e_new.site_id != e_old.site_id):
+            payload["site_id"] = e_new.site_id
+
+        if not payload:
+            logger.debug("[SB] UPDATE SKIPPED (aucun changement): serial=%s mid=%s",
+                        e_new.serial_number, e_new.yuman_material_id)
+            return False
+
+        # LOG des changements détectés
+        if e_old:
+            changes = {k: (getattr(e_old, k, None), v) for k, v in payload.items()
+                       if getattr(e_old, k, None) != v}
+            if changes:
+                updates_logger.info("UPDATE detected for serial=%s mid=%s | Changes: %s",
+                                   e_new.serial_number, e_new.yuman_material_id, changes)
+
+        # UPDATE par serial d'abord
+        serial_new = _norm_serial(e_new.serial_number)
+        updated = False
+
+        if serial_new:
+            updates_logger.debug("Attempting UPDATE by serial=%s with payload=%s", serial_new, payload)
+            res = (
+                self.sb.table(EQUIP_TABLE)
+                .update(payload)
+                .eq("serial_number", serial_new)
+                .execute()
+            )
+            updated = bool(res.data)
+            if updated:
+                updates_logger.info("✅ UPDATE OK by serial=%s: %d row(s) affected", serial_new, len(res.data))
+            else:
+                updates_logger.warning("❌ UPDATE by serial=%s: 0 rows affected", serial_new)
+
+        # Fallback par yuman_material_id si 0 ligne touchée
+        if not updated and e_new.yuman_material_id is not None:
+            updates_logger.debug("Fallback UPDATE by yuman_material_id=%s", e_new.yuman_material_id)
+            res = (
+                self.sb.table(EQUIP_TABLE)
+                .update(payload)
+                .eq("yuman_material_id", e_new.yuman_material_id)
+                .execute()
+            )
+            updated = bool(res.data)
+            if updated:
+                updates_logger.info("✅ UPDATE OK by yuman_material_id=%s: %d row(s) affected",
+                                   e_new.yuman_material_id, len(res.data))
+
+        if not updated:
+            updates_logger.error("❌ UPDATE FAILED (0 rows): serial=%s mid=%s site_id=%s | Payload: %s",
+                                serial_new, e_new.yuman_material_id, e_new.site_id, payload)
+            logger.warning("UPDATE échoué pour serial=%s (voir updates.log pour détails)", serial_new)
+
+        return updated
 
     def apply_equips_patch(self, patch) -> None:
         VALID_COLS = {
@@ -329,81 +423,7 @@ class SupabaseAdapter:
             if e_new.category_id not in PARENT_CATEGORIES:
                 continue
 
-            # NE METTRE À JOUR QUE LES CHAMPS QUI ONT CHANGÉ
-            payload = {}
-            for k, v in e_new.to_db_dict().items():
-                # Skip les champs exclus
-                if k in {"vcom_device_id"}:
-                    continue
-                # Skip les champs non valides
-                if k not in VALID_COLS:
-                    continue
-                # Skip si la valeur est None
-                if v is None:
-                    continue
-
-                # AJOUTER SEULEMENT SI LA VALEUR A CHANGÉ
-                old_value = getattr(e_old, k, None) if e_old else None
-                if old_value != v:
-                    payload[k] = v
-
-            # normaliser serial côté payload si présent
-            if "serial_number" in payload:
-                payload["serial_number"] = _norm_serial(payload["serial_number"])
-
-            # site_id (si présent et changé)
-            if e_new.site_id is not None and (not e_old or e_new.site_id != e_old.site_id):
-                payload["site_id"] = e_new.site_id
-
-            if not payload:
-                logger.debug("[SB] UPDATE SKIPPED (aucun changement): serial=%s mid=%s",
-                            e_new.serial_number, e_new.yuman_material_id)
-                continue
-
-            # LOG des changements détectés
-            if e_old:
-                changes = {k: (getattr(e_old, k, None), v) for k, v in payload.items()
-                           if getattr(e_old, k, None) != v}
-                if changes:
-                    updates_logger.info("UPDATE detected for serial=%s mid=%s | Changes: %s",
-                                       e_new.serial_number, e_new.yuman_material_id, changes)
-
-            # UPDATE par serial d'abord
-            serial_new = _norm_serial(e_new.serial_number)
-            updated = False
-            if serial_new:
-                updates_logger.debug("Attempting UPDATE by serial=%s with payload=%s", serial_new, payload)
-                res = (
-                    self.sb.table(EQUIP_TABLE)
-                    .update(payload)
-                    .eq("serial_number", serial_new)
-                    .execute()
-                )
-                updated = bool(res.data)
-                if updated:
-                    updates_logger.info("✅ UPDATE OK by serial=%s: %d row(s) affected", serial_new, len(res.data))
-                else:
-                    updates_logger.warning("❌ UPDATE by serial=%s: 0 rows affected", serial_new)
-
-            # Fallback par yuman_material_id si 0 ligne touchée
-            if not updated and e_new.yuman_material_id is not None:
-                updates_logger.debug("Fallback UPDATE by yuman_material_id=%s", e_new.yuman_material_id)
-                res = (
-                    self.sb.table(EQUIP_TABLE)
-                    .update(payload)
-                    .eq("yuman_material_id", e_new.yuman_material_id)
-                    .execute()
-                )
-                updated = bool(res.data)
-                if updated:
-                    updates_logger.info("✅ UPDATE OK by yuman_material_id=%s: %d row(s) affected",
-                                       e_new.yuman_material_id, len(res.data))
-
-            if not updated:
-                updates_logger.error("❌ UPDATE FAILED (0 rows): serial=%s mid=%s site_id=%s | Payload: %s",
-                                    serial_new, e_new.yuman_material_id, e_new.site_id, payload)
-                # Log aussi en console pour visibilité
-                logger.warning("UPDATE échoué pour serial=%s (voir updates.log pour détails)", serial_new)
+            self._update_single_equipment(e_old, e_new, VALID_COLS)
 
         # ========== PASSE 2 : Équipements ENFANTS ==========
         # Ces équipements ont un parent_id qui référence un vcom_device_id
@@ -418,81 +438,7 @@ class SupabaseAdapter:
             if e_new.category_id in PARENT_CATEGORIES:
                 continue
 
-            # NE METTRE À JOUR QUE LES CHAMPS QUI ONT CHANGÉ
-            payload = {}
-            for k, v in e_new.to_db_dict().items():
-                # Skip les champs exclus
-                if k in {"vcom_device_id"}:
-                    continue
-                # Skip les champs non valides
-                if k not in VALID_COLS:
-                    continue
-                # Skip si la valeur est None
-                if v is None:
-                    continue
-
-                # AJOUTER SEULEMENT SI LA VALEUR A CHANGÉ
-                old_value = getattr(e_old, k, None) if e_old else None
-                if old_value != v:
-                    payload[k] = v
-
-            # normaliser serial côté payload si présent
-            if "serial_number" in payload:
-                payload["serial_number"] = _norm_serial(payload["serial_number"])
-
-            # site_id (si présent et changé)
-            if e_new.site_id is not None and (not e_old or e_new.site_id != e_old.site_id):
-                payload["site_id"] = e_new.site_id
-
-            if not payload:
-                logger.debug("[SB] UPDATE SKIPPED (aucun changement): serial=%s mid=%s",
-                            e_new.serial_number, e_new.yuman_material_id)
-                continue
-
-            # LOG des changements détectés
-            if e_old:
-                changes = {k: (getattr(e_old, k, None), v) for k, v in payload.items()
-                           if getattr(e_old, k, None) != v}
-                if changes:
-                    updates_logger.info("UPDATE detected for serial=%s mid=%s | Changes: %s",
-                                       e_new.serial_number, e_new.yuman_material_id, changes)
-
-            # UPDATE par serial d'abord
-            serial_new = _norm_serial(e_new.serial_number)
-            updated = False
-            if serial_new:
-                updates_logger.debug("Attempting UPDATE by serial=%s with payload=%s", serial_new, payload)
-                res = (
-                    self.sb.table(EQUIP_TABLE)
-                    .update(payload)
-                    .eq("serial_number", serial_new)
-                    .execute()
-                )
-                updated = bool(res.data)
-                if updated:
-                    updates_logger.info("✅ UPDATE OK by serial=%s: %d row(s) affected", serial_new, len(res.data))
-                else:
-                    updates_logger.warning("❌ UPDATE by serial=%s: 0 rows affected", serial_new)
-
-            # Fallback par yuman_material_id si 0 ligne touchée
-            if not updated and e_new.yuman_material_id is not None:
-                updates_logger.debug("Fallback UPDATE by yuman_material_id=%s", e_new.yuman_material_id)
-                res = (
-                    self.sb.table(EQUIP_TABLE)
-                    .update(payload)
-                    .eq("yuman_material_id", e_new.yuman_material_id)
-                    .execute()
-                )
-                updated = bool(res.data)
-                if updated:
-                    updates_logger.info("✅ UPDATE OK by yuman_material_id=%s: %d row(s) affected",
-                                       e_new.yuman_material_id, len(res.data))
-
-            if not updated:
-                updates_logger.error("❌ UPDATE FAILED (0 rows): serial=%s mid=%s site_id=%s | Payload: %s",
-                                    serial_new, e_new.yuman_material_id, e_new.site_id, payload)
-                # Log aussi en console pour visibilité
-                logger.warning("UPDATE échoué pour serial=%s (voir updates.log pour détails)", serial_new)
+            self._update_single_equipment(e_old, e_new, VALID_COLS)
 
         # ---------- DELETE (flag obsolète) ----------
         if patch.delete:
