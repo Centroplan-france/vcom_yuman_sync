@@ -395,6 +395,156 @@ def main():
     # ══════════════════════════════════════════════════════════════════
     # ÉTAPE 5B : DIAGNOSTIC APPROFONDI
     # ══════════════════════════════════════════════════════════════════
+    #!/usr/bin/env python3
+    """
+    AJOUT À INSÉRER dans test_db_to_yuman_E3K2L.py
+
+    Section à ajouter APRÈS "ÉTAPE 5B : DIAGNOSTIC APPROFONDI"
+    et AVANT le diagnostic des créations
+    """
+
+    # ══════════════════════════════════════════════════════════════════
+    # ÉTAPE 5A : DIAGNOSTIC DES DICTIONNAIRES (CLÉS)
+    # ══════════════════════════════════════════════════════════════════
+    print_header("DIAGNOSTIC DES DICTIONNAIRES (analyse des clés)")
+
+    print(f"\n{C.BOLD}ANALYSE DES MODULES :{C.END}")
+
+    # Compter les MODULES dans chaque snapshot
+    db_modules = [e for e in db_equips.values() if e.category_id == CAT_MODULE]
+    y_modules = [e for e in y_equips.values() if e.category_id == CAT_MODULE]
+
+    print(f"  • Modules en DB:    {len(db_modules)}")
+    print(f"  • Modules en Yuman: {len(y_modules)}")
+
+    # Lister tous les serial_numbers de MODULE
+    if db_modules:
+        print(f"\n{C.BOLD}Modules DB (serial_numbers) :{C.END}")
+        for m in db_modules:
+            print(f"    • {m.serial_number:30} | yuman_material_id={m.yuman_material_id} | brand='{m.brand}' | model='{m.model}'")
+
+    if y_modules:
+        print(f"\n{C.BOLD}Modules Yuman (serial_numbers) :{C.END}")
+        for m in y_modules:
+            print(f"    • {m.serial_number:30} | yuman_material_id={m.yuman_material_id} | brand='{m.brand}' | model='{m.model}'")
+
+    # Vérifier si les clés des dicts sont identiques
+    print(f"\n{C.BOLD}ANALYSE DES CLÉS DES DICTIONNAIRES :{C.END}")
+
+    db_equip_keys = set(db_equips.keys())
+    y_equip_keys = set(y_equips.keys())
+
+    print(f"  • Nombre de clés DB:    {len(db_equip_keys)}")
+    print(f"  • Nombre de clés Yuman: {len(y_equip_keys)}")
+
+    # Clés uniques à DB
+    db_only_keys = db_equip_keys - y_equip_keys
+    if db_only_keys:
+        print(f"\n{C.YELLOW}Clés présentes en DB mais pas en Yuman : {len(db_only_keys)}{C.END}")
+        for key in list(db_only_keys)[:5]:  # Limiter à 5
+            eq = db_equips[key]
+            print(f"    • {key:30} | cat={eq.category_id} | yuman_mid={eq.yuman_material_id}")
+
+    # Clés uniques à Yuman
+    y_only_keys = y_equip_keys - db_equip_keys
+    if y_only_keys:
+        print(f"\n{C.YELLOW}Clés présentes en Yuman mais pas en DB : {len(y_only_keys)}{C.END}")
+        for key in list(y_only_keys)[:5]:  # Limiter à 5
+            eq = y_equips[key]
+            print(f"    • {key:30} | cat={eq.category_id} | yuman_mid={eq.yuman_material_id}")
+
+    # Clés communes
+    common_keys = db_equip_keys & y_equip_keys
+    print(f"\n{C.GREEN}Clés communes : {len(common_keys)}{C.END}")
+
+    # Cas spécifique : MODULES-E3K2L
+    modules_key = "MODULES-E3K2L"
+    print(f"\n{C.BOLD}CAS SPÉCIFIQUE : clé '{modules_key}' :{C.END}")
+    print(f"  • Présente en DB:    {modules_key in db_equip_keys}")
+    print(f"  • Présente en Yuman: {modules_key in y_equip_keys}")
+
+    if modules_key in db_equip_keys:
+        db_mod = db_equips[modules_key]
+        print(f"\n{C.BOLD}MODULE DB (clé={modules_key}) :{C.END}")
+        print(f"    • serial_number:      {db_mod.serial_number}")
+        print(f"    • vcom_device_id:     {db_mod.vcom_device_id}")
+        print(f"    • yuman_material_id:  {db_mod.yuman_material_id}")
+        print(f"    • brand:              '{db_mod.brand}'")
+        print(f"    • model:              '{db_mod.model}'")
+        print(f"    • site_id:            {db_mod.site_id}")
+
+    if modules_key in y_equip_keys:
+        y_mod = y_equips[modules_key]
+        print(f"\n{C.BOLD}MODULE Yuman (clé={modules_key}) :{C.END}")
+        print(f"    • serial_number:      {y_mod.serial_number}")
+        print(f"    • vcom_device_id:     {y_mod.vcom_device_id}")
+        print(f"    • yuman_material_id:  {y_mod.yuman_material_id}")
+        print(f"    • brand:              '{y_mod.brand}'")
+        print(f"    • model:              '{y_mod.model}'")
+        print(f"    • site_id:            {y_mod.site_id}")
+
+    if modules_key in db_equip_keys and modules_key in y_equip_keys:
+        print(f"\n{C.BOLD}COMPARAISON :{C.END}")
+        db_mod = db_equips[modules_key]
+        y_mod = y_equips[modules_key]
+        
+        fields_to_compare = ['serial_number', 'vcom_device_id', 'yuman_material_id', 'brand', 'model', 'site_id']
+        for field in fields_to_compare:
+            db_val = getattr(db_mod, field)
+            y_val = getattr(y_mod, field)
+            if db_val != y_val:
+                print(f"    • {field:20} : {C.RED}DB={db_val!r}{C.END} vs {C.YELLOW}Y={y_val!r}{C.END}")
+            else:
+                print(f"    • {field:20} : {C.GREEN}identique ({db_val!r}){C.END}")
+
+    print(f"\n{C.BOLD}ANALYSE DES ONDULEURS (parent_id) :{C.END}")
+
+    # Chercher l'onduleur A2321502262
+    target_serial = "A2321502262"
+    print(f"\n{C.BOLD}Recherche onduleur serial={target_serial} :{C.END}")
+
+    found_in_db = False
+    found_in_yuman = False
+
+    for eq in db_equips.values():
+        if eq.serial_number == target_serial or eq.vcom_device_id == target_serial:
+            found_in_db = True
+            print(f"  {C.GREEN}✓ Trouvé en DB{C.END}")
+            print(f"    • vcom_device_id:     {eq.vcom_device_id}")
+            print(f"    • yuman_material_id:  {eq.yuman_material_id}")
+            print(f"    • category:           {eq.category_id}")
+            break
+
+    for eq in y_equips.values():
+        if eq.serial_number == target_serial or eq.vcom_device_id == target_serial:
+            found_in_yuman = True
+            print(f"  {C.GREEN}✓ Trouvé en Yuman{C.END}")
+            print(f"    • vcom_device_id:     {eq.vcom_device_id}")
+            print(f"    • yuman_material_id:  {eq.yuman_material_id}")
+            print(f"    • category:           {eq.category_id}")
+            break
+
+    if not found_in_db:
+        print(f"  {C.RED}✗ NON trouvé en DB{C.END}")
+
+    if not found_in_yuman:
+        print(f"  {C.RED}✗ NON trouvé en Yuman{C.END}")
+
+    # Lister TOUS les onduleurs pour référence
+    db_inverters = [e for e in db_equips.values() if e.category_id == CAT_INVERTER]
+    y_inverters = [e for e in y_equips.values() if e.category_id == CAT_INVERTER]
+
+    print(f"\n{C.BOLD}TOUS LES ONDULEURS :{C.END}")
+    print(f"  • DB:    {len(db_inverters)} onduleur(s)")
+    if db_inverters:
+        for inv in db_inverters:
+            print(f"    - serial={inv.serial_number:20} | yuman_mid={inv.yuman_material_id}")
+
+    print(f"  • Yuman: {len(y_inverters)} onduleur(s)")
+    if y_inverters:
+        for inv in y_inverters:
+            print(f"    - serial={inv.serial_number:20} | yuman_mid={inv.yuman_material_id}")
+            
     print_header("DIAGNOSTIC APPROFONDI DES ÉQUIPEMENTS PROBLÉMATIQUES")
     
     # 1. MODULE à CRÉER avec yuman_material_id déjà renseigné
