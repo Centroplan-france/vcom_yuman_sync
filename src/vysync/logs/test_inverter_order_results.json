@@ -1,0 +1,903 @@
+[
+  {
+    "site_key": "6CQT6",
+    "inverter_count": 2,
+    "config_count": 2,
+    "inverters": [
+      {
+        "index": 0,
+        "id": "Id270614.1",
+        "serial": "A2331702715",
+        "name": "SunGrow SG40CX-P2 A2331702715",
+        "details_vendor": "SunGrow",
+        "details_model": "SG40CX-P2"
+      },
+      {
+        "index": 1,
+        "id": "Id270614.2",
+        "serial": "A2371503027",
+        "name": "SunGrow SG125CX-P2 A2371503027",
+        "details_vendor": "SunGrow",
+        "details_model": "SG125CX-P2"
+      }
+    ],
+    "configs": [
+      {
+        "index": 0,
+        "vendor": "Sungrow",
+        "model": "SG125CX-P2",
+        "count": 1
+      },
+      {
+        "index": 1,
+        "vendor": "Sungrow",
+        "model": "SG40CX-P2",
+        "count": 1
+      }
+    ],
+    "mapping_results": {
+      "by_index": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": [
+          {
+            "inv_index": 0,
+            "inv_model": "SG40CX-P2",
+            "cfg_index": 0,
+            "cfg_model": "SG125CX-P2"
+          },
+          {
+            "inv_index": 1,
+            "inv_model": "SG125CX-P2",
+            "cfg_index": 1,
+            "cfg_model": "SG40CX-P2"
+          }
+        ]
+      },
+      "by_name_extraction": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      },
+      "by_reverse_index": {
+        "matches": 2,
+        "mismatches": 0,
+        "details": []
+      }
+    }
+  },
+  {
+    "site_key": "K71V8",
+    "inverter_count": 2,
+    "config_count": 2,
+    "inverters": [
+      {
+        "index": 0,
+        "id": "Id2157649.1",
+        "serial": "A2352012497",
+        "name": "SunGrow SG40CX-P2 A2352012497",
+        "details_vendor": "SunGrow",
+        "details_model": "SG40CX-P2"
+      },
+      {
+        "index": 1,
+        "id": "Id2157649.2",
+        "serial": "A2530300264",
+        "name": "SunGrow SG125CX-P2 A2530300264",
+        "details_vendor": "SunGrow",
+        "details_model": "SG125CX-P2"
+      }
+    ],
+    "configs": [
+      {
+        "index": 0,
+        "vendor": "Sungrow",
+        "model": "SG125CX-P2",
+        "count": 1
+      },
+      {
+        "index": 1,
+        "vendor": "Sungrow",
+        "model": "SG40CX-P2",
+        "count": 1
+      }
+    ],
+    "mapping_results": {
+      "by_index": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": [
+          {
+            "inv_index": 0,
+            "inv_model": "SG40CX-P2",
+            "cfg_index": 0,
+            "cfg_model": "SG125CX-P2"
+          },
+          {
+            "inv_index": 1,
+            "inv_model": "SG125CX-P2",
+            "cfg_index": 1,
+            "cfg_model": "SG40CX-P2"
+          }
+        ]
+      },
+      "by_name_extraction": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      },
+      "by_reverse_index": {
+        "matches": 2,
+        "mismatches": 0,
+        "details": []
+      }
+    }
+  },
+  {
+    "site_key": "BEE9I",
+    "inverter_count": 2,
+    "config_count": 2,
+    "inverters": [
+      {
+        "index": 0,
+        "id": "Id2160879.1",
+        "serial": "A2352012570",
+        "name": "SunGrow SG40CX-P2 A2352012570",
+        "details_vendor": "SunGrow",
+        "details_model": "SG40CX-P2"
+      },
+      {
+        "index": 1,
+        "id": "Id2160879.2",
+        "serial": "A2380307097",
+        "name": "SunGrow SG125CX-P2 A2380307097",
+        "details_vendor": "SunGrow",
+        "details_model": "SG125CX-P2"
+      }
+    ],
+    "configs": [
+      {
+        "index": 0,
+        "vendor": "Sungrow",
+        "model": "SG125CX-P2",
+        "count": 1
+      },
+      {
+        "index": 1,
+        "vendor": "Sungrow",
+        "model": "SG40CX-P2",
+        "count": 1
+      }
+    ],
+    "mapping_results": {
+      "by_index": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": [
+          {
+            "inv_index": 0,
+            "inv_model": "SG40CX-P2",
+            "cfg_index": 0,
+            "cfg_model": "SG125CX-P2"
+          },
+          {
+            "inv_index": 1,
+            "inv_model": "SG125CX-P2",
+            "cfg_index": 1,
+            "cfg_model": "SG40CX-P2"
+          }
+        ]
+      },
+      "by_name_extraction": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      },
+      "by_reverse_index": {
+        "matches": 2,
+        "mismatches": 0,
+        "details": []
+      }
+    }
+  },
+  {
+    "site_key": "WC6HQ",
+    "inverter_count": 2,
+    "config_count": 2,
+    "inverters": [
+      {
+        "index": 0,
+        "id": "Id2159113.1",
+        "serial": "A2532798228",
+        "name": "SunGrow SG125CX-P2 A2532798228",
+        "details_vendor": "SunGrow",
+        "details_model": "SG125CX-P2"
+      },
+      {
+        "index": 1,
+        "id": "Id2159113.2",
+        "serial": "A2351110116",
+        "name": "SunGrow SG40CX-P2 A2351110116",
+        "details_vendor": "SunGrow",
+        "details_model": "SG40CX-P2"
+      }
+    ],
+    "configs": [
+      {
+        "index": 0,
+        "vendor": "Sungrow",
+        "model": "SG125CX-P2",
+        "count": 1
+      },
+      {
+        "index": 1,
+        "vendor": "Sungrow",
+        "model": "SG40CX-P2",
+        "count": 1
+      }
+    ],
+    "mapping_results": {
+      "by_index": {
+        "matches": 2,
+        "mismatches": 0,
+        "details": []
+      },
+      "by_name_extraction": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      },
+      "by_reverse_index": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      }
+    }
+  },
+  {
+    "site_key": "GB5M7",
+    "inverter_count": 2,
+    "config_count": 2,
+    "inverters": [
+      {
+        "index": 0,
+        "id": "Id287384.1",
+        "serial": "A2383003285",
+        "name": "WR 1 - SunGrow  SG125CX-P2 A2383003285",
+        "details_vendor": "SunGrow",
+        "details_model": "SG125CX-P2"
+      },
+      {
+        "index": 1,
+        "id": "Id287384.2",
+        "serial": "A2321470378",
+        "name": "WR 2 - SunGrow SG40CX-P2 A2321470378",
+        "details_vendor": "SunGrow",
+        "details_model": "SG40CX-P2"
+      }
+    ],
+    "configs": [
+      {
+        "index": 0,
+        "vendor": "Sungrow",
+        "model": "SG125CX-P2",
+        "count": 1
+      },
+      {
+        "index": 1,
+        "vendor": "Sungrow",
+        "model": "SG40CX-P2",
+        "count": 1
+      }
+    ],
+    "mapping_results": {
+      "by_index": {
+        "matches": 2,
+        "mismatches": 0,
+        "details": []
+      },
+      "by_name_extraction": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      },
+      "by_reverse_index": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      }
+    }
+  },
+  {
+    "site_key": "YE5T2",
+    "inverter_count": 2,
+    "config_count": 2,
+    "inverters": [
+      {
+        "index": 0,
+        "id": "Id306292.1",
+        "serial": "A2352012558",
+        "name": "SunGrow SG40CX-P2 A2352012558",
+        "details_vendor": "SunGrow",
+        "details_model": "SG40CX-P2"
+      },
+      {
+        "index": 1,
+        "id": "Id306292.2",
+        "serial": "A2381800725",
+        "name": "SunGrow SG125CX-P2 A2381800725",
+        "details_vendor": "",
+        "details_model": "SG125CX-P2"
+      }
+    ],
+    "configs": [
+      {
+        "index": 0,
+        "vendor": "Sungrow",
+        "model": "SG125CX-P2",
+        "count": 1
+      },
+      {
+        "index": 1,
+        "vendor": "Sungrow",
+        "model": "SG40CX-P2",
+        "count": 1
+      }
+    ],
+    "mapping_results": {
+      "by_index": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": [
+          {
+            "inv_index": 0,
+            "inv_model": "SG40CX-P2",
+            "cfg_index": 0,
+            "cfg_model": "SG125CX-P2"
+          },
+          {
+            "inv_index": 1,
+            "inv_model": "SG125CX-P2",
+            "cfg_index": 1,
+            "cfg_model": "SG40CX-P2"
+          }
+        ]
+      },
+      "by_name_extraction": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      },
+      "by_reverse_index": {
+        "matches": 2,
+        "mismatches": 0,
+        "details": []
+      }
+    }
+  },
+  {
+    "site_key": "22ZBI",
+    "inverter_count": 2,
+    "config_count": 2,
+    "inverters": [
+      {
+        "index": 0,
+        "id": "Id2159437.1",
+        "serial": "A2530302894",
+        "name": "SunGrow SG125CX-P2 A2530302894",
+        "details_vendor": "SunGrow",
+        "details_model": "SG125CX-P2"
+      },
+      {
+        "index": 1,
+        "id": "Id2159437.2",
+        "serial": "A2360914493",
+        "name": "SunGrow SG40CX-P2 A2360914493",
+        "details_vendor": "SunGrow",
+        "details_model": "SG40CX-P2"
+      }
+    ],
+    "configs": [
+      {
+        "index": 0,
+        "vendor": "Sungrow",
+        "model": "SG125CX-P2",
+        "count": 1
+      },
+      {
+        "index": 1,
+        "vendor": "Sungrow",
+        "model": "SG40CX-P2",
+        "count": 1
+      }
+    ],
+    "mapping_results": {
+      "by_index": {
+        "matches": 2,
+        "mismatches": 0,
+        "details": []
+      },
+      "by_name_extraction": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      },
+      "by_reverse_index": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      }
+    }
+  },
+  {
+    "site_key": "6TDKL",
+    "inverter_count": 2,
+    "config_count": 2,
+    "inverters": [
+      {
+        "index": 0,
+        "id": "Id2161746.1",
+        "serial": "A2541603178",
+        "name": "SunGrow SG125CX-P2 A2541603178",
+        "details_vendor": "SunGrow",
+        "details_model": "SG125CX-P2"
+      },
+      {
+        "index": 1,
+        "id": "Id2161746.2",
+        "serial": "A2351110100",
+        "name": "SunGrow SG40CX-P2 A2351110100",
+        "details_vendor": "SunGrow",
+        "details_model": "SG40CX-P2"
+      }
+    ],
+    "configs": [
+      {
+        "index": 0,
+        "vendor": "Sungrow",
+        "model": "SG125CX-P2",
+        "count": 1
+      },
+      {
+        "index": 1,
+        "vendor": "Sungrow",
+        "model": "SG40CX-P2",
+        "count": 1
+      }
+    ],
+    "mapping_results": {
+      "by_index": {
+        "matches": 2,
+        "mismatches": 0,
+        "details": []
+      },
+      "by_name_extraction": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      },
+      "by_reverse_index": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      }
+    }
+  },
+  {
+    "site_key": "33KYD",
+    "inverter_count": 2,
+    "config_count": 2,
+    "inverters": [
+      {
+        "index": 0,
+        "id": "Id2161137.1",
+        "serial": "A2360914463",
+        "name": "SunGrow SG40CX-P2 A2360914463",
+        "details_vendor": "SunGrow",
+        "details_model": "SG40CX-P2"
+      },
+      {
+        "index": 1,
+        "id": "Id2161137.2",
+        "serial": "A2541808944",
+        "name": "SunGrow SG125CX-P2 A2541808944",
+        "details_vendor": "SunGrow",
+        "details_model": "SG125CX-P2"
+      }
+    ],
+    "configs": [
+      {
+        "index": 0,
+        "vendor": "Sungrow",
+        "model": "SG125CX-P2",
+        "count": 1
+      },
+      {
+        "index": 1,
+        "vendor": "Sungrow",
+        "model": "SG40CX-P2",
+        "count": 1
+      }
+    ],
+    "mapping_results": {
+      "by_index": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": [
+          {
+            "inv_index": 0,
+            "inv_model": "SG40CX-P2",
+            "cfg_index": 0,
+            "cfg_model": "SG125CX-P2"
+          },
+          {
+            "inv_index": 1,
+            "inv_model": "SG125CX-P2",
+            "cfg_index": 1,
+            "cfg_model": "SG40CX-P2"
+          }
+        ]
+      },
+      "by_name_extraction": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      },
+      "by_reverse_index": {
+        "matches": 2,
+        "mismatches": 0,
+        "details": []
+      }
+    }
+  },
+  {
+    "site_key": "H8CJY",
+    "inverter_count": 2,
+    "config_count": 2,
+    "inverters": [
+      {
+        "index": 0,
+        "id": "Id296093.1",
+        "serial": "A2352012421",
+        "name": "SunGrow SG40CX-P2 A2352012421",
+        "details_vendor": "SunGrow",
+        "details_model": "SG40CX-P2"
+      },
+      {
+        "index": 1,
+        "id": "Id296093.2",
+        "serial": "A2390404311",
+        "name": "SunGrow SG125CX-P2 A2390404311",
+        "details_vendor": "SunGrow",
+        "details_model": "SG125CX-P2"
+      }
+    ],
+    "configs": [
+      {
+        "index": 0,
+        "vendor": "Sungrow",
+        "model": "SG125CX-P2",
+        "count": 1
+      },
+      {
+        "index": 1,
+        "vendor": "Sungrow",
+        "model": "SG40CX-P2",
+        "count": 1
+      }
+    ],
+    "mapping_results": {
+      "by_index": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": [
+          {
+            "inv_index": 0,
+            "inv_model": "SG40CX-P2",
+            "cfg_index": 0,
+            "cfg_model": "SG125CX-P2"
+          },
+          {
+            "inv_index": 1,
+            "inv_model": "SG125CX-P2",
+            "cfg_index": 1,
+            "cfg_model": "SG40CX-P2"
+          }
+        ]
+      },
+      "by_name_extraction": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      },
+      "by_reverse_index": {
+        "matches": 2,
+        "mismatches": 0,
+        "details": []
+      }
+    }
+  },
+  {
+    "site_key": "9RRAP",
+    "inverter_count": 2,
+    "config_count": 2,
+    "inverters": [
+      {
+        "index": 0,
+        "id": "Id2159813.1",
+        "serial": "A2541704368",
+        "name": "SunGrow SG125CX-P2 A2541704368",
+        "details_vendor": "SunGrow",
+        "details_model": "SG125CX-P2"
+      },
+      {
+        "index": 1,
+        "id": "Id2159813.2",
+        "serial": "A2352012527",
+        "name": "SunGrow SG40CX-P2 A2352012527",
+        "details_vendor": "SunGrow",
+        "details_model": "SG40CX-P2"
+      }
+    ],
+    "configs": [
+      {
+        "index": 0,
+        "vendor": "Sungrow",
+        "model": "SG125CX-P2",
+        "count": 1
+      },
+      {
+        "index": 1,
+        "vendor": "Sungrow",
+        "model": "SG40CX-P2",
+        "count": 1
+      }
+    ],
+    "mapping_results": {
+      "by_index": {
+        "matches": 2,
+        "mismatches": 0,
+        "details": []
+      },
+      "by_name_extraction": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      },
+      "by_reverse_index": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      }
+    }
+  },
+  {
+    "site_key": "RFU3B",
+    "inverter_count": 2,
+    "config_count": 2,
+    "inverters": [
+      {
+        "index": 0,
+        "id": "Id270547.1",
+        "serial": "A2382904455",
+        "name": "SunGrow SG125CX-P2 A2382904455",
+        "details_vendor": "SunGrow",
+        "details_model": "SG125CX-P2"
+      },
+      {
+        "index": 1,
+        "id": "Id270547.2",
+        "serial": "A2331702757",
+        "name": "SunGrow SG40CX-P2 A2331702757",
+        "details_vendor": "SunGrow",
+        "details_model": "SG40CX-P2"
+      }
+    ],
+    "configs": [
+      {
+        "index": 0,
+        "vendor": "Sungrow",
+        "model": "SG125CX-P2",
+        "count": 1
+      },
+      {
+        "index": 1,
+        "vendor": "Sungrow",
+        "model": "SG40CX-P2",
+        "count": 1
+      }
+    ],
+    "mapping_results": {
+      "by_index": {
+        "matches": 2,
+        "mismatches": 0,
+        "details": []
+      },
+      "by_name_extraction": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      },
+      "by_reverse_index": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      }
+    }
+  },
+  {
+    "site_key": "KEM7N",
+    "inverter_count": 2,
+    "config_count": 2,
+    "inverters": [
+      {
+        "index": 0,
+        "id": "Id2161703.1",
+        "serial": "A2541808918",
+        "name": "SunGrow SG125CX-P2 A2541808918",
+        "details_vendor": "SunGrow",
+        "details_model": "SG125CX-P2"
+      },
+      {
+        "index": 1,
+        "id": "Id2161703.2",
+        "serial": "A2351110112",
+        "name": "SunGrow SG40CX-P2 A2351110112",
+        "details_vendor": "SunGrow",
+        "details_model": "SG40CX-P2"
+      }
+    ],
+    "configs": [
+      {
+        "index": 0,
+        "vendor": "Sungrow",
+        "model": "SG125CX-P2",
+        "count": 1
+      },
+      {
+        "index": 1,
+        "vendor": "Sungrow",
+        "model": "SG40CX-P2",
+        "count": 1
+      }
+    ],
+    "mapping_results": {
+      "by_index": {
+        "matches": 2,
+        "mismatches": 0,
+        "details": []
+      },
+      "by_name_extraction": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      },
+      "by_reverse_index": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      }
+    }
+  },
+  {
+    "site_key": "Y1B6S",
+    "inverter_count": 2,
+    "config_count": 2,
+    "inverters": [
+      {
+        "index": 0,
+        "id": "Id2160519.1",
+        "serial": "A2352012508",
+        "name": "SunGrow SG40CX-P2 A2352012508",
+        "details_vendor": "SunGrow",
+        "details_model": "SG40CX-P2"
+      },
+      {
+        "index": 1,
+        "id": "Id2160519.2",
+        "serial": "A2541704367",
+        "name": "SunGrow SG125CX-P2 A2541704367",
+        "details_vendor": "SunGrow",
+        "details_model": "SG125CX-P2"
+      }
+    ],
+    "configs": [
+      {
+        "index": 0,
+        "vendor": "Sungrow",
+        "model": "SG125CX-P2",
+        "count": 1
+      },
+      {
+        "index": 1,
+        "vendor": "Sungrow",
+        "model": "SG40CX-P2",
+        "count": 1
+      }
+    ],
+    "mapping_results": {
+      "by_index": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": [
+          {
+            "inv_index": 0,
+            "inv_model": "SG40CX-P2",
+            "cfg_index": 0,
+            "cfg_model": "SG125CX-P2"
+          },
+          {
+            "inv_index": 1,
+            "inv_model": "SG125CX-P2",
+            "cfg_index": 1,
+            "cfg_model": "SG40CX-P2"
+          }
+        ]
+      },
+      "by_name_extraction": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      },
+      "by_reverse_index": {
+        "matches": 2,
+        "mismatches": 0,
+        "details": []
+      }
+    }
+  },
+  {
+    "site_key": "DBSYL",
+    "inverter_count": 2,
+    "config_count": 2,
+    "inverters": [
+      {
+        "index": 0,
+        "id": "Id263301.1",
+        "serial": "A2341400620",
+        "name": "WR1 - SunGrow SG40CX-P2 - E/O A2341400620",
+        "details_vendor": "SunGrow",
+        "details_model": "SG125CX-P2"
+      },
+      {
+        "index": 1,
+        "id": "Id263301.2",
+        "serial": "A2331702843",
+        "name": "WR2 - SunGrow SG40CX-P2 - E/O - A2331702843",
+        "details_vendor": "SunGrow",
+        "details_model": "SG40CX-P2"
+      }
+    ],
+    "configs": [
+      {
+        "index": 0,
+        "vendor": "Sungrow",
+        "model": "SG125CX-P2",
+        "count": 1
+      },
+      {
+        "index": 1,
+        "vendor": "Sungrow",
+        "model": "SG40CX-P2",
+        "count": 1
+      }
+    ],
+    "mapping_results": {
+      "by_index": {
+        "matches": 2,
+        "mismatches": 0,
+        "details": []
+      },
+      "by_name_extraction": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      },
+      "by_reverse_index": {
+        "matches": 0,
+        "mismatches": 2,
+        "details": []
+      }
+    }
+  }
+]
