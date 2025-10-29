@@ -54,6 +54,11 @@ SIM_FIELDS = {
     "N° carte SIM": 17940,
     "Opérateur":    14653,
 }
+MODULE_FIELDS = {
+    "nombre de modules": 18504,
+    "marque du module":  18505,
+    "modèle de module":  18506,
+}
 CUSTOM_INVERTER_ID = "Inverter ID (Vcom)"
 
 # ───────────────────────────── Adapter Yuman ───────────────────────────
@@ -245,7 +250,17 @@ class YumanAdapter:
             elif cat_id == CAT_SIM:
                 brand = (raw_fields.get("Opérateur") or "").strip()
                 model = (raw_fields.get("N° carte SIM") or "").strip()
-            # Pour INVERTER et MODULE : model vient du custom field "Modèle", brand du champ standard
+            # Pour MODULE : brand/model/count dans custom fields (symétriques aux STRING)
+            elif cat_id == CAT_MODULE:
+                brand = module_brand
+                model = module_model
+                # count → custom field "nombre de modules" (déjà lu aux lignes 228-233)
+                # Pas besoin de re-parser ici, la variable count est déjà définie
+            # Pour INVERTER : brand du champ standard, model du custom field "Modèle"
+            elif cat_id == CAT_INVERTER:
+                brand = (m.get("brand") or "").strip()
+                model = (raw_fields.get("Modèle") or "").strip()
+            # Autres catégories
             else:
                 brand = (m.get("brand") or "").strip()
                 model = (raw_fields.get("Modèle") or "").strip()
@@ -480,18 +495,22 @@ class YumanAdapter:
                 "serial_number": e.serial_number or e.vcom_device_id,
             }
 
-            # brand : uniquement pour INVERTER et MODULE (champ standard)
-            # Pour STRING et SIM : brand est dans custom fields
-            if e.category_id in (CAT_INVERTER, CAT_MODULE):
+            # brand : uniquement pour INVERTER (champ standard)
+            # Pour STRING, SIM et MODULE : brand est dans custom fields
+            if e.category_id == CAT_INVERTER:
                 payload["brand"] = e.brand
 
             fields: List[Dict[str, Any]] = []
 
             # -------- CAT_SPÉCIFIQUES --------
             if e.category_id == CAT_MODULE:
-                # MODULE : model → custom field "Modèle"
+                # MODULE : brand/model/count → custom fields (symétriques aux STRING)
+                if e.brand:
+                    fields.append({"blueprint_id": MODULE_FIELDS["marque du module"], "value": e.brand})
                 if e.model:
-                    fields.append({"blueprint_id": BP_MODEL, "value": e.model})
+                    fields.append({"blueprint_id": MODULE_FIELDS["modèle de module"], "value": e.model})
+                if e.count is not None:
+                    fields.append({"blueprint_id": MODULE_FIELDS["nombre de modules"], "value": str(e.count)})
 
             elif e.category_id == CAT_INVERTER:
                 # INVERTER : model → custom field "Modèle"
@@ -594,9 +613,9 @@ class YumanAdapter:
             # serial_number : toujours modifiable
             _set("serial_number")
 
-            # brand : modifiable uniquement pour INVERTER et MODULE (champ standard)
-            # Pour STRING et SIM : brand est dans custom fields
-            if old.category_id in (CAT_INVERTER, CAT_MODULE):
+            # brand : modifiable uniquement pour INVERTER (champ standard)
+            # Pour STRING, SIM et MODULE : brand est dans custom fields
+            if old.category_id == CAT_INVERTER:
                 _set("brand")
 
             # -------- CAT_SPÉCIFIQUES --------
@@ -610,10 +629,16 @@ class YumanAdapter:
                                         "value": new.model})
 
             elif old.category_id == CAT_MODULE:
-                # MODULE : model → custom field "Modèle"
-                if old.model != new.model:
-                    fields_patch.append({"blueprint_id": BP_MODEL,
-                                        "value": new.model})
+                # MODULE : brand/model/count → custom fields (symétriques aux STRING)
+                if (old.brand or "") != (new.brand or ""):
+                    fields_patch.append({"blueprint_id": MODULE_FIELDS["marque du module"],
+                                        "value": new.brand or ""})
+                if (old.model or "") != (new.model or ""):
+                    fields_patch.append({"blueprint_id": MODULE_FIELDS["modèle de module"],
+                                        "value": new.model or ""})
+                if old.count != new.count and new.count is not None:
+                    fields_patch.append({"blueprint_id": MODULE_FIELDS["nombre de modules"],
+                                        "value": str(new.count)})
 
             elif old.category_id == CAT_STRING:
                 # STRING : brand/model/count → custom fields
