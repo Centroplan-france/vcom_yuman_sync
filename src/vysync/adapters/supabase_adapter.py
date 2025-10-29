@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from supabase import create_client, Client as SupabaseClient
+from vysync.diff import _is_missing
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -589,18 +590,30 @@ class SupabaseAdapter:
             # NE METTRE À JOUR QUE LES CHAMPS QUI ONT CHANGÉ
             payload = {}
             for k, v in e.to_db_dict().items():
-                # Skip les champs exclus
-                if k in {"vcom_device_id", "yuman_material_id"}:
+                # Skip les champs exclus (vcom_device_id uniquement)
+                if k == "vcom_device_id":
                     continue
                 # Skip les champs non valides
                 if k not in VALID:
                     continue
-                # Skip si la valeur est None
-                if v is None:
+
+                # Récupérer la valeur actuelle DB
+                old_value = getattr(old, k, None)
+
+                # ✅ PROTECTION ANTI-ÉCRASEMENT
+                # Si DB a une valeur NON-VIDE et source est VIDE → NE PAS écraser
+                if not _is_missing(old_value) and _is_missing(v):
+                    updates_logger.debug(
+                        "[PROTECTION] Skip écrasement serial=%s champ=%s: %r → %r (DB pleine, source vide)",
+                        e.serial_number, k, old_value, v
+                    )
+                    continue
+
+                # Skip si la nouvelle valeur est None ET l'ancienne aussi
+                if v is None and old_value is None:
                     continue
 
                 # AJOUTER SEULEMENT SI LA VALEUR A CHANGÉ
-                old_value = getattr(old, k, None)
                 if old_value != v:
                     payload[k] = v
 
