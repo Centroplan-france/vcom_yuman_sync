@@ -114,18 +114,22 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
 
         # --- Onduleurs -----------------------------------------------------------
         inverters = vc.get_inverters(key)
+        configs = tech.get("systemConfigurations", [])
 
         # on garantit un ordre stable pour attribuer les index (WR 1, WR 2, …)
         for idx, inv in enumerate(inverters, start=1):
-            det_inv = vc.get_inverter_details(key, inv["id"])
+            # Récupérer la config correspondante par index (idx-1 car enumerate start=1)
+            cfg = configs[idx - 1] if idx - 1 < len(configs) else {}
+            inv_info = cfg.get("inverter", {})
+
             inv_eq = Equipment(
                 site_id         = site_id,
                 category_id     = CAT_INVERTER,
                 eq_type         = "inverter",
                 vcom_device_id  = inv["id"],
                 name            = f"WR {idx} - Onduleur",
-                brand           = det_inv.get("vendor"),
-                model           = det_inv.get("model"),
+                brand           = inv_info.get("vendor") or "",
+                model           = inv_info.get("model") or "",
                 serial_number   = inv.get("serial"),
             )
             equips[inv_eq.key()] = inv_eq
