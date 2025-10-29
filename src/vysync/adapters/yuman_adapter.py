@@ -642,11 +642,8 @@ class YumanAdapter:
 
             elif old.category_id == CAT_STRING:
                 # STRING : brand/model/count → custom fields
-                # parent_id : modifiable uniquement à la création
-                if new.parent_id and old.parent_id != new.parent_id:
-                    parent_mat = id_by_vcom.get(new.parent_id)
-                    if parent_mat:
-                        payload["parent_id"] = parent_mat
+                # ⚠️ parent_id : NON MODIFIABLE via API Yuman (uniquement à la création)
+                # On ne tente donc JAMAIS de l'updater
 
                 # champs custom
                 def _maybe(bp, ov, nv):
