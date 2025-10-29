@@ -173,6 +173,40 @@ def main():
         }
         print(f"  • {cat_names.get(cat_id, 'UNKNOWN'):15} : {count}")
     
+
+    # ═══════════════════════════════════════════════════════════════
+    # DEBUG : Données brutes Yuman pour 1 STRING
+    # ═══════════════════════════════════════════════════════════════
+    print_header("DEBUG : DONNÉES BRUTES YUMAN pour STRING")
+
+    # Trouver le STRING problématique
+    target_string = None
+    for eq in y_equips_filtered.values():
+        if eq.category_id == CAT_STRING and "MPPT-4.1" in eq.vcom_device_id:
+            target_string = eq
+            break
+
+    if target_string:
+        print(f"STRING trouvé : {target_string.name}")
+        print(f"yuman_material_id : {target_string.yuman_material_id}")
+        
+        # Fetch les détails complets depuis Yuman
+        print("\nAppel y.yc.get_material() avec embed=fields...")
+        raw_mat = y.yc.get_material(target_string.yuman_material_id, embed="fields")
+        
+        print(f"\n{C.BOLD}Champs standard Yuman :{C.END}")
+        print(f"  name:          {raw_mat.get('name')}")
+        print(f"  brand:         {raw_mat.get('brand')}")
+        print(f"  model:         {raw_mat.get('model')}")
+        print(f"  count:         {raw_mat.get('count')}")
+        print(f"  parent_id:     {raw_mat.get('parent_id')}")
+        print(f"  serial_number: {raw_mat.get('serial_number')}")
+        
+        print(f"\n{C.BOLD}Custom fields (_embed.fields) :{C.END}")
+        for field in raw_mat.get("_embed", {}).get("fields", []):
+            print(f"  • {field['name']:30} = {field.get('value')}")
+
+
     # ═══════════════════════════════════════════════════════════════
     # ÉTAPE 3 : SNAPSHOT DB ACTUEL (CODE EXACT DE cli.py)
     # ═══════════════════════════════════════════════════════════════
