@@ -46,9 +46,9 @@ SITE_FIELDS = {
 }
 STRING_FIELDS = {
     "MPPT index":       16020,
-    "nombre de module": 16021,
+    "nombre de modules": 16021,  # ✅ pluriel
     "marque du module": 16022,
-    "model de module":  16023,
+    "modèle de module":  16023,  # ✅ avec accent
 }
 SIM_FIELDS = {
     "N° carte SIM": 17940,
@@ -222,7 +222,7 @@ class YumanAdapter:
             )
 
             # --- count (nombre de modules) ---------------------------
-            raw_nb = raw_fields.get("nombre de module")
+            raw_nb = raw_fields.get("nombre de modules")  # ✅ avec 's'
             try:
                 count = int(raw_nb) if raw_nb not in (None, "") else None
             except ValueError:
@@ -231,7 +231,7 @@ class YumanAdapter:
             # --- autres normalisations -------------------------------
             mppt_idx     = str(raw_fields.get("MPPT index", "")).strip()
             module_brand = (raw_fields.get("marque du module") or "").strip()
-            module_model = (raw_fields.get("model de module")  or "").strip()
+            module_model = (raw_fields.get("modèle de module")  or "").strip()  # ✅ avec accent
 
             name   = (m.get("name")          or "").strip()
             serial = (m.get("serial_number") or "").strip()
@@ -458,9 +458,9 @@ class YumanAdapter:
         BP_MODEL        = 13548
         BP_INVERTER_ID  = 13977
         BP_MPPT_IDX     = STRING_FIELDS["MPPT index"]
-        BP_NB_MODULES   = STRING_FIELDS["nombre de module"]
+        BP_NB_MODULES   = STRING_FIELDS["nombre de modules"]  # ✅ avec 's'
         BP_MODULE_BRAND = STRING_FIELDS["marque du module"]
-        BP_MODULE_MODEL = STRING_FIELDS["model de module"]
+        BP_MODULE_MODEL = STRING_FIELDS["modèle de module"]  # ✅ avec accent
 
         # ───────────────────────── INSERTIONS ──────────────────────────── #
         for e in sorted(patch.add, key=lambda x: _ORDER.get(x.category_id, 99)):

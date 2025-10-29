@@ -346,15 +346,29 @@ def diff_fill_missing(
             d_db  = asdict(db_obj)
             d_src = asdict(src)
 
+            # Identifier les champs manquants à remplir
             missing = [
                 f for f in to_check
                 if _is_missing(d_db.get(f)) and not _is_missing(d_src.get(f))
             ]
+
             if missing:
+                # ✅ PROTECTION : ne jamais écraser une valeur DB non-vide avec une valeur source vide
+                # On crée un dictionnaire merged où on garde les valeurs DB pour les champs
+                # où la source est vide mais la DB est pleine
+                d_merged = d_src.copy()
+                for key in d_src.keys():
+                    if not _is_missing(d_db.get(key)) and _is_missing(d_src.get(key)):
+                        # DB pleine + Source vide → garder la valeur DB pour éviter l'écrasement
+                        d_merged[key] = d_db[key]
+
+                # Créer un nouvel objet avec les valeurs merged
+                src_merged = type(src)(**d_merged)
+
                 logger.debug(
                     "MISE À JOUR (clé=%s) champs manquants=[%s] → %s",
-                    key, ", ".join(missing), _format_diff(db_obj, src)
+                    key, ", ".join(missing), _format_diff(db_obj, src_merged)
                 )
-                upd.append((db_obj, src))
+                upd.append((db_obj, src_merged))
 
     return PatchSet(add=add, update=upd, delete=[])  # jamais de delete ici
