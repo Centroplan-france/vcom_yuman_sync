@@ -277,6 +277,49 @@ def main():
     print(f"  • ADD:    {len(patch_maps_equips.add)}")
     print(f"  • UPDATE: {len(patch_maps_equips.update)}")
     print(f"  • DELETE: {len(patch_maps_equips.delete)}")
+
+
+    # ═══════════════════════════════════════════════════════════════
+    # DEBUG : Contenu EXACT du patch
+    # ═══════════════════════════════════════════════════════════════
+    print_header("DEBUG : CONTENU EXACT DU PATCH")
+
+    if patch_maps_equips.update:
+        print(f"\n{C.BOLD}Détail des {len(patch_maps_equips.update)} updates :{C.END}")
+        
+        for idx, (old, new) in enumerate(patch_maps_equips.update, 1):
+            cat_names = {
+                CAT_MODULE: "MODULE",
+                CAT_INVERTER: "INVERTER",
+                CAT_STRING: "STRING",
+                CAT_SIM: "SIM",
+                CAT_CENTRALE: "CENTRALE"
+            }
+            
+            print(f"\n  {C.YELLOW}[{idx}] {cat_names.get(new.category_id, 'UNKNOWN')} - {new.name}{C.END}")
+            print(f"      serial_number: {new.serial_number}")
+            
+            # Comparer champ par champ
+            for field in ['brand', 'model', 'count', 'yuman_material_id', 'parent_id']:
+                old_val = getattr(old, field, None)
+                new_val = getattr(new, field, None)
+                
+                if old_val != new_val:
+                    # Déterminer si c'est un "fill" valide ou un "écrasement" invalide
+                    is_fill = (old_val in (None, "", 0) and new_val not in (None, "", 0))
+                    is_erase = (old_val not in (None, "", 0) and new_val in (None, "", 0))
+                    
+                    if is_fill:
+                        color = C.GREEN
+                        status = "✓ FILL (OK)"
+                    elif is_erase:
+                        color = C.RED
+                        status = "✗ ERASE (INTERDIT)"
+                    else:
+                        color = C.YELLOW
+                        status = "~ UPDATE"
+                    
+                    print(f"      {color}{field:20} : {old_val!r:30} → {new_val!r:30} {status}{C.END}")
     
     # ═══════════════════════════════════════════════════════════════
     # ÉTAPE 5 : DÉTAILS DES CHANGEMENTS (1 par catégorie)
