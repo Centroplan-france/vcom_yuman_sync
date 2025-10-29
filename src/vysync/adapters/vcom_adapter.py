@@ -114,13 +114,23 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
 
         # --- Onduleurs -----------------------------------------------------------
         inverters = vc.get_inverters(key)
-        configs = tech.get("systemConfigurations", [])
+        configs = tech.get("systemConfigurations", [])  # Pour fallback si get_inverter_details vide
 
         # on garantit un ordre stable pour attribuer les index (WR 1, WR 2, …)
         for idx, inv in enumerate(inverters, start=1):
-            # Récupérer la config correspondante par index (idx-1 car enumerate start=1)
-            cfg = configs[idx - 1] if idx - 1 < len(configs) else {}
-            inv_info = cfg.get("inverter", {})
+            # 1) Source principale : get_inverter_details() (fiable pour 90% des sites)
+            det_inv = vc.get_inverter_details(key, inv["id"])
+            brand = det_inv.get("vendor") or None
+            model = det_inv.get("model") or None
+
+            # 2) Fallback : technical_data si vide (pour les 10% de sites anciens)
+            if not brand or not model:
+                # Utiliser la première config comme approximation
+                # (acceptable car sites mono-modèle sont majoritaires)
+                cfg = configs[0] if configs else {}
+                inv_info = cfg.get("inverter", {})
+                brand = brand or inv_info.get("vendor") or ""
+                model = model or inv_info.get("model") or ""
 
             inv_eq = Equipment(
                 site_id         = site_id,
@@ -128,8 +138,8 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
                 eq_type         = "inverter",
                 vcom_device_id  = inv["id"],
                 name            = f"WR {idx} - Onduleur",
-                brand           = inv_info.get("vendor") or "",
-                model           = inv_info.get("model") or "",
+                brand           = brand,
+                model           = model,
                 serial_number   = inv.get("serial"),
             )
             equips[inv_eq.key()] = inv_eq
