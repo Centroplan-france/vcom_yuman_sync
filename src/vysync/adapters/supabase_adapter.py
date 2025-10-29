@@ -177,6 +177,9 @@ class SupabaseAdapter:
                 or []
             )
             for r in page:
+                # Normaliser le serial_number (trim espaces)
+                serial = (r.get("serial_number") or "").strip()
+
                 eq = Equipment(
                     site_id=r["site_id"],
                     category_id=r["category_id"],
@@ -185,12 +188,12 @@ class SupabaseAdapter:
                     name=r["name"],
                     brand=r.get("brand"),
                     model=r.get("model"),
-                    serial_number=r.get("serial_number"),
+                    serial_number=serial,
                     count=r.get("count"),
                     parent_id=r.get("parent_id"),
                     yuman_material_id=r.get("yuman_material_id"),
                 )
-                equips[r.get("serial_number")] = eq
+                equips[serial] = eq
             if len(page) < step:
                 break        # dernière page atteinte
             from_row += step
@@ -210,6 +213,9 @@ class SupabaseAdapter:
                 .data or []
             )
             for r in page:
+                # Normaliser le serial_number (trim espaces)
+                serial = (r.get("serial_number") or "").strip()
+
                 eq = Equipment(
                     site_id=r["site_id"],
                     category_id=r["category_id"],
@@ -218,12 +224,12 @@ class SupabaseAdapter:
                     name=r["name"],
                     brand=r.get("brand"),
                     model=r.get("model"),
-                    serial_number=r.get("serial_number"),
+                    serial_number=serial,
                     count=r.get("count"),
                     parent_id=r.get("parent_id"),
                     yuman_material_id=r.get("yuman_material_id"),
                 )
-                equips[r["serial_number"]] = eq
+                equips[serial] = eq
             if len(page) < step:
                 break        # dernière page atteinte
             from_row += step
