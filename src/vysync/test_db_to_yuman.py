@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test du flux Supabase → Yuman pour le site E3K2L
+Test du flux Supabase → Yuman pour le site XUI1A
 
 Ce script teste la synchronisation complète :
 1. État initial DB (sites_mapping + equipments_mapping)
@@ -175,7 +175,7 @@ def print_equipment_diff(old: Equipment, new: Equipment, sb: SupabaseAdapter):
 
 def main():
     """Point d'entrée du test"""
-    SITE_KEY = "E3K2L"
+    SITE_KEY = "XUI1A"
     
     print_header(f"TEST SUPABASE → YUMAN pour le site {SITE_KEY}")
     
@@ -458,7 +458,7 @@ def main():
     print(f"\n{C.GREEN}Clés communes : {len(common_keys)}{C.END}")
 
     # Cas spécifique : MODULES-E3K2L
-    modules_key = "MODULES-E3K2L"
+    modules_key = "MODULES-XUI1A"
     print(f"\n{C.BOLD}CAS SPÉCIFIQUE : clé '{modules_key}' :{C.END}")
     print(f"  • Présente en DB:    {modules_key in db_equip_keys}")
     print(f"  • Présente en Yuman: {modules_key in y_equip_keys}")
