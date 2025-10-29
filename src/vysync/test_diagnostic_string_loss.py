@@ -1,34 +1,25 @@
 #!/usr/bin/env python3
 """
-Test détaillé du flux VCOM → Supabase pour le site E3K2L
-
-Ce script analyse chaque étape du processus de synchronisation :
-1. État initial DB
-2. Snapshot VCOM
-3. Diff (détection des changements)
-4. Application des patches
+Test du flux Yuman → Supabase pour le site E3K2L
+Réplique exactement le code de cli.py (PHASE 1 B) avec diagnostics
 """
 
 import sys
-import os
 from pathlib import Path
 from collections import defaultdict
-from typing import Dict, List, Any
+from typing import Dict, Any
 
-# Ajouter le chemin src au PYTHONPATH
-sys.path.insert(0, str(Path(__file__).parent / "src"))
-
+# Setup logging
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from vysync.logging_config import setup_logging
-from vysync.vcom_client import VCOMAPIClient
-from vysync.adapters.supabase_adapter import SupabaseAdapter
-from vysync.adapters.vcom_adapter import fetch_snapshot
-from vysync.diff import diff_entities
-from vysync.models import Equipment, Site, CAT_INVERTER, CAT_MODULE, CAT_STRING, CAT_SIM, CAT_CENTRALE
-
-# Configuration du logging
 setup_logging()
 
-# Couleurs pour terminal
+from vysync.adapters.supabase_adapter import SupabaseAdapter
+from vysync.adapters.yuman_adapter import YumanAdapter
+from vysync.diff import diff_fill_missing
+from vysync.models import Equipment, Site, CAT_INVERTER, CAT_MODULE, CAT_STRING, CAT_SIM, CAT_CENTRALE
+
+# Couleurs
 class C:
     HEADER = '\033[95m'
     BLUE = '\033[94m'
@@ -39,18 +30,16 @@ class C:
     BOLD = '\033[1m'
 
 def print_header(text: str):
-    """Affiche un header coloré"""
     print(f"\n{C.HEADER}{C.BOLD}{'='*80}{C.END}")
     print(f"{C.HEADER}{C.BOLD}{text}{C.END}")
     print(f"{C.HEADER}{C.BOLD}{'='*80}{C.END}\n")
 
 def print_section(text: str):
-    """Affiche une section"""
     print(f"\n{C.BLUE}{C.BOLD}{text}{C.END}")
     print(f"{C.BLUE}{'-'*80}{C.END}")
 
-def print_equipment_detail(eq: Equipment, sb: SupabaseAdapter, prefix: str = ""):
-    """Affiche les détails d'un équipement"""
+def print_equipment_detail(eq: Equipment, sb: SupabaseAdapter, label: str):
+    """Affiche TOUS les champs d'un équipement"""
     cat_names = {
         CAT_MODULE: "MODULE",
         CAT_INVERTER: "INVERTER",
@@ -59,265 +48,288 @@ def print_equipment_detail(eq: Equipment, sb: SupabaseAdapter, prefix: str = "")
         CAT_CENTRALE: "CENTRALE"
     }
     
-    print(f"{prefix}{C.BOLD}[{cat_names.get(eq.category_id, 'UNKNOWN')}] {eq.name}{C.END}")
-    print(f"{prefix}  • vcom_device_id:     {eq.vcom_device_id}")
-    print(f"{prefix}  • serial_number:      {eq.serial_number}")
-    print(f"{prefix}  • brand:              {eq.brand}")
-    print(f"{prefix}  • model:              {eq.model}")
-    print(f"{prefix}  • count:              {eq.count}")
-    print(f"{prefix}  • parent_id:          {eq.parent_id}")
-    print(f"{prefix}  • yuman_material_id:  {eq.yuman_material_id}")
-    print(f"{prefix}  • site_id:            {eq.site_id}")
-    print(f"{prefix}  • vcom_system_key:    {eq.get_vcom_system_key(sb)}")
+    print(f"\n{C.BOLD}[{cat_names.get(eq.category_id, 'UNKNOWN')}] {label}{C.END}")
+    print(f"  site_id:            {eq.site_id}")
+    print(f"  category_id:        {eq.category_id}")
+    print(f"  eq_type:            {eq.eq_type}")
+    print(f"  vcom_device_id:     {eq.vcom_device_id}")
+    print(f"  name:               {eq.name}")
+    print(f"  brand:              {eq.brand}")
+    print(f"  model:              {eq.model}")
+    print(f"  serial_number:      {eq.serial_number}")
+    print(f"  count:              {eq.count}")
+    print(f"  parent_id:          {eq.parent_id}")
+    print(f"  yuman_material_id:  {eq.yuman_material_id}")
 
-def print_site_detail(site: Site, sb: SupabaseAdapter, prefix: str = ""):
-    """Affiche les détails d'un site"""
-    print(f"{prefix}{C.BOLD}{site.name}{C.END}")
-    print(f"{prefix}  • id:                 {site.id}")
-    print(f"{prefix}  • vcom_system_key:    {site.get_vcom_system_key(sb)}")
-    print(f"{prefix}  • yuman_site_id:      {site.get_yuman_site_id(sb)}")
-    print(f"{prefix}  • address:            {site.address}")
-    print(f"{prefix}  • latitude:           {site.latitude}")
-    print(f"{prefix}  • longitude:          {site.longitude}")
-    print(f"{prefix}  • nominal_power:      {site.nominal_power}")
-    print(f"{prefix}  • commission_date:    {site.commission_date}")
-    print(f"{prefix}  • client_map_id:      {site.client_map_id}")
-
-def group_by_category(equips: Dict[str, Equipment]) -> Dict[int, List[Equipment]]:
-    """Regroupe les équipements par catégorie"""
-    groups = defaultdict(list)
-    for eq in equips.values():
-        groups[eq.category_id].append(eq)
-    return dict(groups)
-
-def print_patch_details(patch, data_type: str, sb: SupabaseAdapter):
-    """Affiche les détails d'un patch"""
-    print(f"\n{C.YELLOW}Patch {data_type}:{C.END}")
-    print(f"  • ADD:    {len(patch.add)}")
-    print(f"  • UPDATE: {len(patch.update)}")
-    print(f"  • DELETE: {len(patch.delete)}")
+def compare_equipment(old: Equipment, new: Equipment, sb: SupabaseAdapter):
+    """Compare 2 équipements et affiche les différences"""
+    cat_names = {
+        CAT_MODULE: "MODULE",
+        CAT_INVERTER: "INVERTER",
+        CAT_STRING: "STRING",
+        CAT_SIM: "SIM",
+        CAT_CENTRALE: "CENTRALE"
+    }
     
-    if data_type == "Equipment":
-        # Grouper par catégorie
-        if patch.add:
-            print(f"\n{C.GREEN}  Ajouts par catégorie :{C.END}")
-            groups = group_by_category({e.key(): e for e in patch.add})
-            for cat_id, items in groups.items():
-                cat_names = {
-                    CAT_MODULE: "MODULE",
-                    CAT_INVERTER: "INVERTER",
-                    CAT_STRING: "STRING",
-                    CAT_SIM: "SIM",
-                    CAT_CENTRALE: "CENTRALE"
-                }
-                print(f"    - {cat_names.get(cat_id, 'UNKNOWN')}: {len(items)}")
-                # Afficher le premier de chaque catégorie
-                print_equipment_detail(items[0], sb, prefix="      ")
-        
-        if patch.update:
-            print(f"\n{C.YELLOW}  Mises à jour par catégorie :{C.END}")
-            groups = group_by_category({e[1].key(): e[1] for e in patch.update})
-            for cat_id, items in groups.items():
-                cat_names = {
-                    CAT_MODULE: "MODULE",
-                    CAT_INVERTER: "INVERTER",
-                    CAT_STRING: "STRING",
-                    CAT_SIM: "SIM",
-                    CAT_CENTRALE: "CENTRALE"
-                }
-                print(f"    - {cat_names.get(cat_id, 'UNKNOWN')}: {len(items)}")
-                # Afficher le premier changement de chaque catégorie
-                old, new = patch.update[0]
-                print(f"      {C.RED}AVANT:{C.END}")
-                print_equipment_detail(old, sb, prefix="        ")
-                print(f"      {C.GREEN}APRÈS:{C.END}")
-                print_equipment_detail(new, sb, prefix="        ")
+    print(f"\n{C.BOLD}[{cat_names.get(new.category_id, 'UNKNOWN')}] {new.name}{C.END}")
     
-    elif data_type == "Site":
-        if patch.add:
-            print(f"\n{C.GREEN}  Ajouts :{C.END}")
-            for site in patch.add:
-                print_site_detail(site, sb, prefix="    ")
+    # Comparer tous les champs
+    fields = ['site_id', 'category_id', 'eq_type', 'vcom_device_id', 'name', 
+              'brand', 'model', 'serial_number', 'count', 'parent_id', 'yuman_material_id']
+    
+    has_changes = False
+    for field in fields:
+        old_val = getattr(old, field, None) if old else None
+        new_val = getattr(new, field, None)
         
-        if patch.update:
-            print(f"\n{C.YELLOW}  Mises à jour :{C.END}")
-            for old, new in patch.update:
-                print(f"    {C.RED}AVANT:{C.END}")
-                print_site_detail(old, sb, prefix="      ")
-                print(f"    {C.GREEN}APRÈS:{C.END}")
-                print_site_detail(new, sb, prefix="      ")
+        if old_val != new_val:
+            has_changes = True
+            print(f"  {field:20} : {C.RED}{old_val}{C.END} → {C.GREEN}{new_val}{C.END}")
+        else:
+            print(f"  {field:20} : {old_val}")
+    
+    if not has_changes:
+        print(f"  {C.YELLOW}(aucun changement){C.END}")
 
 def main():
-    """Point d'entrée du test"""
     SITE_KEY = "E3K2L"
     
-    print_header(f"TEST VCOM → SUPABASE pour le site {SITE_KEY}")
+    print_header(f"TEST YUMAN → SUPABASE pour {SITE_KEY}")
+    print(f"{C.YELLOW}Ce script reproduit EXACTEMENT le code de cli.py (PHASE 1 B){C.END}")
     
-    # ══════════════════════════════════════════════════════════════════
-    # INITIALISATION
-    # ══════════════════════════════════════════════════════════════════
-    print_section("INITIALISATION")
-    print("Connexion à VCOM...")
-    vc = VCOMAPIClient()
-    print(f"{C.GREEN}✓ VCOM connecté{C.END}")
+    # ═══════════════════════════════════════════════════════════════
+    # ÉTAPE 1 : INITIALISATION
+    # ═══════════════════════════════════════════════════════════════
+    print_header("ÉTAPE 1 : INITIALISATION")
     
-    print("Connexion à Supabase...")
+    print("Connexion Supabase...")
     sb = SupabaseAdapter()
     print(f"{C.GREEN}✓ Supabase connecté{C.END}")
     
-    # ══════════════════════════════════════════════════════════════════
-    # ÉTAPE 1 : ÉTAT INITIAL DB
-    # ══════════════════════════════════════════════════════════════════
-    print_header(f"ÉTAPE 1 : ÉTAT INITIAL DB pour {SITE_KEY}")
+    print("Connexion Yuman...")
+    y = YumanAdapter(sb)
+    print(f"{C.GREEN}✓ Yuman connecté{C.END}")
     
-    print("Récupération des données DB...")
-    db_sites = sb.fetch_sites_v(site_key=SITE_KEY)
-    db_equips = sb.fetch_equipments_v(site_key=SITE_KEY)
+    # Résolution E3K2L → yuman_site_id
+    print(f"\nRésolution {SITE_KEY} → yuman_site_id...")
+    site_result = sb.sb.table("sites_mapping").select("id, yuman_site_id").eq(
+        "vcom_system_key", SITE_KEY
+    ).execute()
     
-    print(f"\n{C.BOLD}Résultats :{C.END}")
-    print(f"  • Sites:       {len(db_sites)}")
-    print(f"  • Équipements: {len(db_equips)}")
+    if not site_result.data:
+        print(f"{C.RED}✗ Site {SITE_KEY} non trouvé en DB{C.END}")
+        return
     
-    if db_sites:
-        print(f"\n{C.BOLD}Détail du site :{C.END}")
-        for site in db_sites.values():
-            print_site_detail(site, sb, prefix="  ")
+    supabase_site_id = site_result.data[0]['id']
+    yuman_site_id = site_result.data[0]['yuman_site_id']
     
-    if db_equips:
-        print(f"\n{C.BOLD}Équipements par catégorie :{C.END}")
-        groups = group_by_category(db_equips)
-        for cat_id, items in groups.items():
-            cat_names = {
-                CAT_MODULE: "MODULE",
-                CAT_INVERTER: "INVERTER",
-                CAT_STRING: "STRING",
-                CAT_SIM: "SIM",
-                CAT_CENTRALE: "CENTRALE"
-            }
-            print(f"\n  [{cat_names.get(cat_id, 'UNKNOWN')}] : {len(items)} équipement(s)")
-            # Afficher le premier de chaque type
-            print_equipment_detail(items[0], sb, prefix="    ")
+    print(f"  • Supabase site_id:  {supabase_site_id}")
+    print(f"  • Yuman site_id:     {yuman_site_id}")
     
-    # ══════════════════════════════════════════════════════════════════
-    # ÉTAPE 2 : SNAPSHOT VCOM
-    # ══════════════════════════════════════════════════════════════════
-    print_header(f"ÉTAPE 2 : SNAPSHOT VCOM pour {SITE_KEY}")
+    if not yuman_site_id:
+        print(f"{C.RED}✗ Pas de yuman_site_id pour {SITE_KEY}{C.END}")
+        return
     
-    print("Appel de fetch_snapshot()...")
-    print(f"{C.YELLOW}⏳ Ceci va faire plusieurs appels API VCOM...{C.END}")
+    # ═══════════════════════════════════════════════════════════════
+    # ÉTAPE 2 : SNAPSHOT YUMAN (CODE EXACT DE cli.py)
+    # ═══════════════════════════════════════════════════════════════
+    print_header("ÉTAPE 2 : SNAPSHOT YUMAN (fetch complet puis filtrage)")
     
-    v_sites, v_equips = fetch_snapshot(
-        vc,
-        vcom_system_key=SITE_KEY,
-        skip_keys=None,
-        sb_adapter=sb
+    print("Appel y.yc.list_clients()...")
+    y_clients = list(y.yc.list_clients())
+    print(f"{C.GREEN}✓ {len(y_clients)} clients récupérés{C.END}")
+    
+    print("\nAppel y.fetch_sites()...")
+    y_sites = y.fetch_sites()
+    print(f"{C.GREEN}✓ {len(y_sites)} sites récupérés (TOUS){C.END}")
+    
+    print("\nAppel y.fetch_equips()...")
+    y_equips = y.fetch_equips()
+    print(f"{C.GREEN}✓ {len(y_equips)} équipements récupérés (TOUS){C.END}")
+    
+    # Filtrage sur notre site
+    print(f"\n{C.YELLOW}Filtrage sur yuman_site_id={yuman_site_id}...{C.END}")
+    
+    y_sites_filtered = {k: s for k, s in y_sites.items() if k == yuman_site_id}
+    y_equips_filtered = {k: e for k, e in y_equips.items() 
+                         if e.site_id == supabase_site_id}
+    
+    print(f"  • Sites filtrés:       {len(y_sites_filtered)}")
+    print(f"  • Équipements filtrés: {len(y_equips_filtered)}")
+    
+    # Statistiques par catégorie
+    by_cat = defaultdict(int)
+    for eq in y_equips_filtered.values():
+        by_cat[eq.category_id] += 1
+    
+    print(f"\n{C.BOLD}Répartition Yuman par catégorie :{C.END}")
+    for cat_id, count in sorted(by_cat.items()):
+        cat_names = {
+            CAT_MODULE: "MODULE",
+            CAT_INVERTER: "INVERTER",
+            CAT_STRING: "STRING",
+            CAT_SIM: "SIM",
+            CAT_CENTRALE: "CENTRALE"
+        }
+        print(f"  • {cat_names.get(cat_id, 'UNKNOWN'):15} : {count}")
+    
+    # ═══════════════════════════════════════════════════════════════
+    # ÉTAPE 3 : SNAPSHOT DB ACTUEL (CODE EXACT DE cli.py)
+    # ═══════════════════════════════════════════════════════════════
+    print_header("ÉTAPE 3 : SNAPSHOT DB ACTUEL")
+    
+    print("Appel sb.fetch_sites_y()...")
+    db_maps_sites = sb.fetch_sites_y()
+    print(f"{C.GREEN}✓ {len(db_maps_sites)} sites en DB (TOUS){C.END}")
+    
+    print("\nAppel sb.fetch_equipments_y()...")
+    db_maps_equips = sb.fetch_equipments_y()
+    print(f"{C.GREEN}✓ {len(db_maps_equips)} équipements en DB (TOUS){C.END}")
+    
+    # Filtrage sur notre site
+    print(f"\n{C.YELLOW}Filtrage sur yuman_site_id={yuman_site_id}...{C.END}")
+    
+    db_maps_sites_filtered = {k: s for k, s in db_maps_sites.items() 
+                              if k == yuman_site_id}
+    db_maps_equips_filtered = {k: e for k, e in db_maps_equips.items() 
+                               if e.site_id == supabase_site_id}
+    
+    print(f"  • Sites filtrés:       {len(db_maps_sites_filtered)}")
+    print(f"  • Équipements filtrés: {len(db_maps_equips_filtered)}")
+    
+    # Statistiques par catégorie
+    by_cat_db = defaultdict(int)
+    for eq in db_maps_equips_filtered.values():
+        by_cat_db[eq.category_id] += 1
+    
+    print(f"\n{C.BOLD}Répartition DB par catégorie :{C.END}")
+    for cat_id, count in sorted(by_cat_db.items()):
+        cat_names = {
+            CAT_MODULE: "MODULE",
+            CAT_INVERTER: "INVERTER",
+            CAT_STRING: "STRING",
+            CAT_SIM: "SIM",
+            CAT_CENTRALE: "CENTRALE"
+        }
+        print(f"  • {cat_names.get(cat_id, 'UNKNOWN'):15} : {count}")
+    
+    # ═══════════════════════════════════════════════════════════════
+    # ÉTAPE 4 : DIFF (CODE EXACT DE cli.py)
+    # ═══════════════════════════════════════════════════════════════
+    print_header("ÉTAPE 4 : DIFF (diff_fill_missing)")
+    
+    print("Calcul patch_sites avec diff_fill_missing...")
+    patch_maps_sites = diff_fill_missing(
+        db_maps_sites_filtered,
+        y_sites_filtered,
+        fields=["yuman_site_id", "code", "client_map_id", "name", "aldi_id",
+                "aldi_store_id", "project_number_cp", "commission_date", "nominal_power"]
     )
     
-    print(f"\n{C.BOLD}Résultats :{C.END}")
-    print(f"  • Sites:       {len(v_sites)}")
-    print(f"  • Équipements: {len(v_equips)}")
+    print(f"{C.GREEN}✓ Patch sites calculé{C.END}")
+    print(f"  • ADD:    {len(patch_maps_sites.add)}")
+    print(f"  • UPDATE: {len(patch_maps_sites.update)}")
+    print(f"  • DELETE: {len(patch_maps_sites.delete)}")
     
-    if v_sites:
-        print(f"\n{C.BOLD}Détail du site :{C.END}")
-        for site in v_sites.values():
-            print_site_detail(site, sb, prefix="  ")
-    
-    if v_equips:
-        print(f"\n{C.BOLD}Équipements par catégorie :{C.END}")
-        groups = group_by_category(v_equips)
-        for cat_id, items in groups.items():
-            cat_names = {
-                CAT_MODULE: "MODULE",
-                CAT_INVERTER: "INVERTER",
-                CAT_STRING: "STRING",
-                CAT_SIM: "SIM",
-                CAT_CENTRALE: "CENTRALE"
-            }
-            print(f"\n  [{cat_names.get(cat_id, 'UNKNOWN')}] : {len(items)} équipement(s)")
-            # Afficher le premier de chaque type
-            print_equipment_detail(items[0], sb, prefix="    ")
-    
-    # ══════════════════════════════════════════════════════════════════
-    # ÉTAPE 3 : DIFF
-    # ══════════════════════════════════════════════════════════════════
-    print_header("ÉTAPE 3 : DIFF (DB → VCOM)")
-    
-    print("Calcul des différences pour les sites...")
-    patch_sites = diff_entities(
-        db_sites, v_sites,
-        ignore_fields={"yuman_site_id", "client_map_id", "code", "ignore_site"}
+    print("\nCalcul patch_equips avec diff_fill_missing...")
+    patch_maps_equips = diff_fill_missing(
+        db_maps_equips_filtered,
+        y_equips_filtered,
+        fields=["category_id", "eq_type", "name", "yuman_material_id",
+                "serial_number", "brand", "model", "count", "parent_id"]
     )
     
-    print("Calcul des différences pour les équipements...")
-    patch_equips = diff_entities(
-        db_equips, v_equips,
-        ignore_fields={"yuman_material_id", "parent_id"}
-    )
+    print(f"{C.GREEN}✓ Patch équipements calculé{C.END}")
+    print(f"  • ADD:    {len(patch_maps_equips.add)}")
+    print(f"  • UPDATE: {len(patch_maps_equips.update)}")
+    print(f"  • DELETE: {len(patch_maps_equips.delete)}")
     
-    print_patch_details(patch_sites, "Site", sb)
-    print_patch_details(patch_equips, "Equipment", sb)
+    # ═══════════════════════════════════════════════════════════════
+    # ÉTAPE 5 : DÉTAILS DES CHANGEMENTS (1 par catégorie)
+    # ═══════════════════════════════════════════════════════════════
+    print_header("ÉTAPE 5 : DÉTAILS DES CHANGEMENTS")
     
-    # ══════════════════════════════════════════════════════════════════
-    # ÉTAPE 4 : APPLICATION (avec confirmation)
-    # ══════════════════════════════════════════════════════════════════
-    print_header("ÉTAPE 4 : APPLICATION DES PATCHES")
+    if patch_maps_equips.add:
+        print_section("AJOUTS")
+        by_cat_add = defaultdict(list)
+        for eq in patch_maps_equips.add:
+            by_cat_add[eq.category_id].append(eq)
+        
+        for cat_id in sorted(by_cat_add.keys()):
+            eq = by_cat_add[cat_id][0]  # Premier de chaque catégorie
+            print_equipment_detail(eq, sb, f"{eq.name} (NOUVEAU)")
+    
+    if patch_maps_equips.update:
+        print_section("MISES À JOUR")
+        by_cat_upd = defaultdict(list)
+        for old, new in patch_maps_equips.update:
+            by_cat_upd[new.category_id].append((old, new))
+        
+        for cat_id in sorted(by_cat_upd.keys()):
+            old, new = by_cat_upd[cat_id][0]  # Premier de chaque catégorie
+            compare_equipment(old, new, sb)
+    
+    # ═══════════════════════════════════════════════════════════════
+    # ÉTAPE 6 : CONFIRMATION
+    # ═══════════════════════════════════════════════════════════════
+    print_header("ÉTAPE 6 : CONFIRMATION")
     
     print(f"{C.YELLOW}⚠️  Cette étape va MODIFIER la base de données{C.END}")
     print(f"\nChangements à appliquer :")
-    print(f"  Sites:       +{len(patch_sites.add)} ~{len(patch_sites.update)} -{len(patch_sites.delete)}")
-    print(f"  Équipements: +{len(patch_equips.add)} ~{len(patch_equips.update)} -{len(patch_equips.delete)}")
+    print(f"  Sites:       +{len(patch_maps_sites.add)} ~{len(patch_maps_sites.update)} -{len(patch_maps_sites.delete)}")
+    print(f"  Équipements: +{len(patch_maps_equips.add)} ~{len(patch_maps_equips.update)} -{len(patch_maps_equips.delete)}")
     
-    response = input(f"\n{C.BOLD}Confirmer l'application ? (oui/non) :{C.END} ")
+    response = input(f"\n{C.BOLD}Taper 'oui' pour appliquer : {C.END}")
     
     if response.lower() != "oui":
         print(f"{C.RED}✗ Application annulée{C.END}")
         return
     
-    print(f"\n{C.GREEN}Application des patches...{C.END}")
+    # ═══════════════════════════════════════════════════════════════
+    # ÉTAPE 7 : APPLICATION (CODE EXACT DE cli.py)
+    # ═══════════════════════════════════════════════════════════════
+    print_header("ÉTAPE 7 : APPLICATION")
     
-    print("  → Application patch sites...")
-    sb.apply_sites_patch(patch_sites)
-    print(f"    {C.GREEN}✓ Sites mis à jour{C.END}")
+    print("Application sb.apply_sites_patch()...")
+    sb.apply_sites_patch(patch_maps_sites)
+    print(f"{C.GREEN}✓ Sites appliqués{C.END}")
     
-    print("  → Application patch équipements...")
-    sb.apply_equips_patch(patch_equips)
-    print(f"    {C.GREEN}✓ Équipements mis à jour{C.END}")
+    print("\nApplication sb.apply_equips_mapping_patch()...")
+    sb.apply_equips_mapping_patch(patch_maps_equips)
+    print(f"{C.GREEN}✓ Équipements appliqués{C.END}")
     
-    # ══════════════════════════════════════════════════════════════════
-    # ÉTAPE 5 : VÉRIFICATION FINALE
-    # ══════════════════════════════════════════════════════════════════
-    print_header("ÉTAPE 5 : VÉRIFICATION FINALE")
+    # ═══════════════════════════════════════════════════════════════
+    # ÉTAPE 8 : VÉRIFICATION FINALE
+    # ═══════════════════════════════════════════════════════════════
+    print_header("ÉTAPE 8 : VÉRIFICATION FINALE")
     
-    print("Re-lecture de la DB après application...")
-    db_sites_after = sb.fetch_sites_v(site_key=SITE_KEY)
-    db_equips_after = sb.fetch_equipments_v(site_key=SITE_KEY)
+    print("Re-fetch DB après application...")
+    db_maps_equips_after = sb.fetch_equipments_y()
+    db_maps_equips_after_filtered = {k: e for k, e in db_maps_equips_after.items()
+                                     if e.site_id == supabase_site_id}
     
-    print(f"\n{C.BOLD}État final DB :{C.END}")
-    print(f"  • Sites:       {len(db_sites_after)}")
-    print(f"  • Équipements: {len(db_equips_after)}")
+    print(f"{C.GREEN}✓ {len(db_maps_equips_after_filtered)} équipements en DB{C.END}")
     
-    print(f"\n{C.BOLD}Comparaison avant/après :{C.END}")
-    print(f"  Sites:       {len(db_sites)} → {len(db_sites_after)} ({len(db_sites_after) - len(db_sites):+d})")
-    print(f"  Équipements: {len(db_equips)} → {len(db_equips_after)} ({len(db_equips_after) - len(db_equips):+d})")
+    # Comparaison avant/après
+    by_cat_after = defaultdict(int)
+    for eq in db_maps_equips_after_filtered.values():
+        by_cat_after[eq.category_id] += 1
     
-    # Grouper par catégorie pour comparaison
-    if db_equips_after:
-        print(f"\n{C.BOLD}Équipements finaux par catégorie :{C.END}")
-        groups_after = group_by_category(db_equips_after)
-        groups_before = group_by_category(db_equips)
-        
-        for cat_id in sorted(set(groups_after.keys()) | set(groups_before.keys())):
-            cat_names = {
-                CAT_MODULE: "MODULE",
-                CAT_INVERTER: "INVERTER",
-                CAT_STRING: "STRING",
-                CAT_SIM: "SIM",
-                CAT_CENTRALE: "CENTRALE"
-            }
-            before = len(groups_before.get(cat_id, []))
-            after = len(groups_after.get(cat_id, []))
-            diff = after - before
-            print(f"  [{cat_names.get(cat_id, 'UNKNOWN')}]: {before} → {after} ({diff:+d})")
+    print(f"\n{C.BOLD}Comparaison AVANT → APRÈS :{C.END}")
+    all_cats = set(by_cat_db.keys()) | set(by_cat_after.keys())
+    for cat_id in sorted(all_cats):
+        cat_names = {
+            CAT_MODULE: "MODULE",
+            CAT_INVERTER: "INVERTER",
+            CAT_STRING: "STRING",
+            CAT_SIM: "SIM",
+            CAT_CENTRALE: "CENTRALE"
+        }
+        before = by_cat_db.get(cat_id, 0)
+        after = by_cat_after.get(cat_id, 0)
+        diff = after - before
+        color = C.GREEN if diff >= 0 else C.RED
+        print(f"  • {cat_names.get(cat_id, 'UNKNOWN'):15} : {before} → {after} {color}({diff:+d}){C.END}")
     
     print_header("✅ TEST TERMINÉ")
 

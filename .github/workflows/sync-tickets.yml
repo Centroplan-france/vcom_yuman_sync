@@ -36,14 +36,16 @@ jobs:
         run: |
           poetry run python - << 'EOF'
           import logging
-          from vysync.app_logging import init_logger
           from vysync.adapters.supabase_adapter import SupabaseAdapter
           from vysync.adapters.yuman_adapter     import YumanAdapter
           from vysync.diff                       import diff_fill_missing
 
           # logger
-          logger = init_logger(__name__)
-          logger.setLevel(logging.INFO)
+          logging.basicConfig(
+              level=logging.INFO,
+              format='%(levelname)s | %(message)s'
+          )
+          logger = logging.getLogger(__name__)
 
           # 1) snapshot Yuman
           sb = SupabaseAdapter()
