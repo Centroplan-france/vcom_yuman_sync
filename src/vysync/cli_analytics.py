@@ -74,6 +74,20 @@ def upsert_monthly_analytics(
     """
     now_iso = datetime.now(timezone.utc).isoformat()
 
+    # Calcul is_complete : TRUE si les 4 données essentielles sont présentes
+    is_complete = all([
+        data.get("production_kwh") is not None,
+        data.get("irradiance_avg") is not None,
+        data.get("performance_ratio") is not None,
+        data.get("availability") is not None
+    ])
+
+    # Calcul has_meter_data : TRUE si au moins une donnée meter est présente
+    has_meter_data = any([
+        data.get("grid_export_kwh") is not None,
+        data.get("grid_import_kwh") is not None
+    ])
+
     row = {
         "site_id": site_id,
         "month": month,
@@ -84,7 +98,8 @@ def upsert_monthly_analytics(
         "grid_export_kwh": data.get("grid_export_kwh"),
         "grid_import_kwh": data.get("grid_import_kwh"),
         "meter_id": data.get("meter_id"),
-        "has_meter_data": data.get("has_meter_data", False),
+        "has_meter_data": has_meter_data,
+        "is_complete": is_complete,
         "updated_at": now_iso,
     }
 
