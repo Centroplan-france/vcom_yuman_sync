@@ -119,7 +119,8 @@ def sync_site_analytics(
     sb: SupabaseAdapter,
     system_key: str,
     site_id: int,
-    months: List[Tuple[int, int]]
+    months: List[Tuple[int, int]],
+    meter_id: str | None = None
 ) -> None:
     """
     Synchronise les analytics d'un site pour une liste de mois.
@@ -130,6 +131,7 @@ def sync_site_analytics(
         system_key: Clé du système VCOM (ex: "E3K2L")
         site_id: ID du site dans sites_mapping
         months: Liste de tuples (year, month), ex: [(2024, 12), (2025, 1)]
+        meter_id: ID du meter (optionnel, évite appels API répétés)
     """
     logger.info("-" * 70)
     logger.info("Synchronisation analytics pour %s (site_id=%d) - %d mois",
@@ -145,7 +147,7 @@ def sync_site_analytics(
         try:
             # Récupérer les analytics du mois
             analytics = vcom_analytics.fetch_monthly_analytics(
-                vc, system_key, year, month
+                vc, system_key, year, month, meter_id=meter_id
             )
 
             # Formater la date au format YYYY-MM-01
@@ -167,7 +169,8 @@ def sync_site_analytics(
 def sync_all_sites_historical(
     vc: VCOMAPIClient,
     sb: SupabaseAdapter,
-    site_key_filter: str | None = None
+    site_key_filter: str | None = None,
+    force: bool = False
 ) -> None:
     """
     Mode --historical : tous les sites depuis commission_date.
@@ -181,11 +184,14 @@ def sync_all_sites_historical(
         vc: Client VCOM API
         sb: Adapter Supabase
         site_key_filter: Si fourni, ne traite que ce site
+        force: Si True, re-synchronise même si données existent déjà
     """
     logger.info("=" * 70)
     logger.info("[MODE HISTORICAL] Synchronisation complète depuis commission_date")
     if site_key_filter:
         logger.info("Filtre actif: site_key=%s", site_key_filter)
+    if force:
+        logger.info("Mode FORCE activé: re-synchronisation complète")
     logger.info("=" * 70)
 
     # Récupérer tous les sites depuis sites_mapping
@@ -217,20 +223,35 @@ def sync_all_sites_historical(
             skipped += 1
             continue
 
+        # Récupérer meter_id avec cache
+        meter_id = vcom_analytics.get_or_fetch_meter_id(vc, sb, system_key, site.id)
+
         try:
-            # Générer la liste des mois
-            months = vcom_analytics.get_month_range(site.commission_date)
+            # Générer la liste des années (pas des mois)
+            start_year = datetime.fromisoformat(site.commission_date.replace("Z", "+00:00")).year
+            end_year = datetime.now(timezone.utc).year - 1  # Dernière année complète
 
-            if not months:
-                logger.warning("Aucun mois à synchroniser pour %s", system_key)
-                skipped += 1
-                continue
+            success_count = 0
+            skipped_count = 0
 
-            logger.info("Mois à synchroniser: %d (depuis %s)",
-                       len(months), site.commission_date)
+            for year in range(start_year, end_year + 1):
+                # Skip intelligent si année déjà complète
+                if not force:
+                    is_complete, missing = vcom_analytics.check_year_completion(sb, site.id, year)
+                    if is_complete:
+                        logger.info("Année %d déjà complète pour %s, skip", year, system_key)
+                        skipped_count += 12
+                        continue
 
-            # Synchroniser tous les mois du site
-            sync_site_analytics(vc, sb, system_key, site.id, months)
+                # Générer les mois de cette année
+                months = [(year, m) for m in range(1, 13)]
+
+                # Synchroniser l'année
+                sync_site_analytics(vc, sb, system_key, site.id, months, meter_id=meter_id)
+                success_count += 12
+
+            logger.info("✓ %s: %d mois traités, %d mois skipped",
+                       system_key, success_count, skipped_count)
             processed += 1
 
         except Exception as exc:
@@ -304,11 +325,11 @@ def sync_all_sites_last_month(
                 # Parser commission_date en ajoutant explicitement la timezone si absente
                 commission_str = site.commission_date.replace("Z", "+00:00")
                 commission_dt = datetime.fromisoformat(commission_str)
-                
+
                 # Si naive, ajouter UTC
                 if commission_dt.tzinfo is None:
                     commission_dt = commission_dt.replace(tzinfo=timezone.utc)
-                
+
                 last_month_dt = datetime(last_month_year, last_month, 1, tzinfo=timezone.utc)
 
                 if commission_dt > last_month_dt:
@@ -318,10 +339,13 @@ def sync_all_sites_last_month(
             except Exception as exc:
                 logger.warning("Erreur parsing commission_date: %s", exc)
 
+        # Récupérer meter_id avec cache
+        meter_id = vcom_analytics.get_or_fetch_meter_id(vc, sb, system_key, site.id)
+
         try:
             # Synchroniser uniquement le mois dernier
             months = [(last_month_year, last_month)]
-            sync_site_analytics(vc, sb, system_key, site.id, months)
+            sync_site_analytics(vc, sb, system_key, site.id, months, meter_id=meter_id)
             processed += 1
 
         except Exception as exc:
@@ -378,6 +402,13 @@ Exemples d'utilisation:
         help="Limiter à un site spécifique (ex: E3K2L)"
     )
 
+    # Option pour forcer la re-synchronisation
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Forcer la re-synchronisation même si données existent déjà"
+    )
+
     args = parser.parse_args()
 
     # Initialiser le logging
@@ -399,7 +430,7 @@ Exemples d'utilisation:
     # Lancer la synchronisation selon le mode
     try:
         if args.historical:
-            sync_all_sites_historical(vc, sb, site_key_filter=args.site_key)
+            sync_all_sites_historical(vc, sb, site_key_filter=args.site_key, force=args.force)
         elif args.last_month:
             sync_all_sites_last_month(vc, sb, site_key_filter=args.site_key)
 
