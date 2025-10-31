@@ -228,8 +228,9 @@ def sync_all_sites_historical(
 
         try:
             # Générer la liste des années (pas des mois)
-            start_year = datetime.fromisoformat(site.commission_date.replace("Z", "+00:00")).year
-            end_year = datetime.now(timezone.utc).year - 1  # Dernière année complète
+            commission_dt = datetime.fromisoformat(site.commission_date.replace("Z", "+00:00"))
+            start_year = commission_dt.year
+            end_year = datetime.now(timezone.utc).year - 1  # dernière année complète
 
             success_count = 0
             skipped_count = 0
@@ -243,12 +244,29 @@ def sync_all_sites_historical(
                         skipped_count += 12
                         continue
 
-                # Générer les mois de cette année
-                months = [(year, m) for m in range(1, 13)]
+                # ───────────────────────────────
+                # Construction intelligente des mois
+                # ───────────────────────────────
+                if year == commission_dt.year:
+                    # Mois de démarrage = mois de commission
+                    start_month = commission_dt.month
+                else:
+                    start_month = 1
+
+                if year == end_year:
+                    # Si dernière année = on s'arrête au mois dernier
+                    end_month = datetime.now(timezone.utc).month - 1
+                else:
+                    end_month = 12
+
+                months = [(year, m) for m in range(start_month, end_month + 1)]
+                if not months:
+                    logger.info("Aucun mois valide à traiter pour %d", year)
+                    continue
 
                 # Synchroniser l'année
                 sync_site_analytics(vc, sb, system_key, site.id, months, meter_id=meter_id)
-                success_count += 12
+                success_count += len(months)
 
             logger.info("✓ %s: %d mois traités, %d mois skipped",
                        system_key, success_count, skipped_count)
