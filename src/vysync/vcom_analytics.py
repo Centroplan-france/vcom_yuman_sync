@@ -140,6 +140,115 @@ def get_primary_meter(vc: VCOMAPIClient, system_key: str) -> Dict[str, Any] | No
         return None
 
 
+def get_or_fetch_meter_id(
+    vc: VCOMAPIClient,
+    sb,
+    system_key: str,
+    site_id: int
+) -> str | None:
+    """
+    Récupère l'ID du meter depuis le cache DB ou VCOM.
+
+    Si vcom_meter_id existe en DB → retourne directement (0 appel API)
+    Sinon → fetch VCOM + enregistre en DB (1 appel API unique)
+
+    Args:
+        vc: Client VCOM API
+        sb: Adapter Supabase
+        system_key: Clé du système VCOM
+        site_id: ID du site dans sites_mapping
+
+    Returns:
+        ID du meter ou None si aucun meter
+    """
+    try:
+        # 1. Checker le cache en DB
+        result = sb.sb.table("sites_mapping")\
+            .select("vcom_meter_id")\
+            .eq("id", site_id)\
+            .single()\
+            .execute()
+
+        cached_meter_id = result.data.get("vcom_meter_id")
+
+        if cached_meter_id:
+            logger.debug("Meter ID trouvé en cache pour site_id=%d: %s",
+                        site_id, cached_meter_id)
+            return cached_meter_id
+
+        # 2. Sinon, fetch depuis VCOM
+        logger.debug("Meter ID absent du cache, fetch VCOM pour %s", system_key)
+        meter = get_primary_meter(vc, system_key)
+
+        if not meter:
+            logger.warning("Aucun meter trouvé pour %s", system_key)
+            return None
+
+        meter_id = meter.get("id")
+
+        # 3. Enregistrer en DB pour cache futur
+        sb.sb.table("sites_mapping")\
+            .update({"vcom_meter_id": meter_id})\
+            .eq("id", site_id)\
+            .execute()
+
+        logger.info("✓ Meter ID %s enregistré en cache pour site_id=%d",
+                   meter_id, site_id)
+
+        return meter_id
+
+    except Exception as exc:
+        logger.error("Erreur lors de la récupération du meter ID pour site_id=%d: %s",
+                    site_id, exc)
+        return None
+
+
+def check_year_completion(
+    sb,
+    site_id: int,
+    year: int
+) -> tuple[bool, set[int]]:
+    """
+    Vérifie quels mois d'une année sont déjà en DB.
+
+    Args:
+        sb: Adapter Supabase
+        site_id: ID du site
+        year: Année à vérifier
+
+    Returns:
+        (is_complete, missing_months)
+        - is_complete: True si les 12 mois sont déjà en DB
+        - missing_months: set des mois manquants (1-12)
+    """
+    try:
+        result = sb.sb.table("monthly_analytics")\
+            .select("month")\
+            .eq("site_id", site_id)\
+            .gte("month", f"{year}-01-01")\
+            .lte("month", f"{year}-12-31")\
+            .execute()
+
+        existing_months = {
+            int(row["month"].split("-")[1])
+            for row in result.data
+        }
+
+        all_months = set(range(1, 13))
+        missing_months = all_months - existing_months
+        is_complete = len(missing_months) == 0
+
+        logger.debug("Année %d pour site_id=%d: %d/12 mois présents",
+                    year, site_id, len(existing_months))
+
+        return is_complete, missing_months
+
+    except Exception as exc:
+        logger.warning("Erreur check completion année %d site_id=%d: %s",
+                      year, site_id, exc)
+        return False, set(range(1, 13))
+
+
 def fetch_monthly_basics(
     vc: VCOMAPIClient,
     system_key: str,
@@ -296,7 +405,8 @@ def fetch_monthly_analytics(
     vc: VCOMAPIClient,
     system_key: str,
     year: int,
-    month: int
+    month: int,
+    meter_id: str | None = None
 ) -> Dict[str, Any]:
     """
     Agrège toutes les données analytics pour un site et un mois.
@@ -311,6 +421,7 @@ def fetch_monthly_analytics(
         system_key: Clé du système VCOM
         year: Année
         month: Mois (1-12)
+        meter_id: ID du meter (optionnel, évite un appel API si fourni)
 
     Returns:
         Dictionnaire avec toutes les métriques du mois:
@@ -349,10 +460,8 @@ def fetch_monthly_analytics(
     analytics["performance_ratio"] = calculations.get("PR")
     analytics["availability"] = calculations.get("VFG")
 
-    # 3. Récupérer METERS si disponible
-    meter = get_primary_meter(vc, system_key)
-    if meter:
-        meter_id = meter.get("id")
+    # 3. Récupérer METERS si disponible (utiliser meter_id fourni)
+    if meter_id:
         analytics["meter_id"] = meter_id
         analytics["has_meter_data"] = True
 
@@ -360,7 +469,7 @@ def fetch_monthly_analytics(
         analytics["grid_export_kwh"] = meters_data.get("M_AC_E_EXP")
         analytics["grid_import_kwh"] = meters_data.get("M_AC_E_IMP")
     else:
-        logger.warning("Meter non trouvé pour %s", system_key)
+        logger.warning("Meter ID non fourni pour %s", system_key)
 
     logger.debug("Analytics complètes pour %s %d-%02d: %s",
                 system_key, year, month, analytics)
