@@ -301,9 +301,14 @@ def sync_all_sites_last_month(
         # Vérifier si le site était déjà en service le mois dernier
         if site.commission_date:
             try:
-                commission_dt = datetime.fromisoformat(
-                    site.commission_date.replace("Z", "+00:00")
-                )
+                # Parser commission_date en ajoutant explicitement la timezone si absente
+                commission_str = site.commission_date.replace("Z", "+00:00")
+                commission_dt = datetime.fromisoformat(commission_str)
+                
+                # Si naive, ajouter UTC
+                if commission_dt.tzinfo is None:
+                    commission_dt = commission_dt.replace(tzinfo=timezone.utc)
+                
                 last_month_dt = datetime(last_month_year, last_month, 1, tzinfo=timezone.utc)
 
                 if commission_dt > last_month_dt:

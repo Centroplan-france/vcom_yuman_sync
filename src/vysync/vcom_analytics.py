@@ -176,7 +176,7 @@ def fetch_monthly_basics(
             data = response.json().get("data", {})
 
             # Structure: {"<system_key>": {"<abbrev>": [{"timestamp": ..., "value": ...}]}}
-            measurements = data.get(system_key, {}).get(abbrev, [])
+            measurements = data.get(abbrev, [])
             result[abbrev] = _extract_single_value(measurements)
 
             logger.debug("BASICS %s pour %s %d-%02d: %s",
@@ -224,7 +224,7 @@ def fetch_monthly_calculations(
             response = vc._make_request("GET", endpoint, params=params)
             data = response.json().get("data", {})
 
-            measurements = data.get(system_key, {}).get(abbrev, [])
+            measurements = data.get(abbrev, [])
             result[abbrev] = _extract_single_value(measurements)
 
             logger.debug("CALCULATIONS %s pour %s %d-%02d: %s",
@@ -427,3 +427,4 @@ def get_month_range(
     except Exception as exc:
         logger.error("Erreur lors du calcul de la plage de mois: %s", exc)
         return []
+

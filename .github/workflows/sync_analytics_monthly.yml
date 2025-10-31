@@ -1,0 +1,36 @@
+name: Sync analytics monthly
+
+on:
+  schedule:
+    - cron: '0 6 2 * *'   # Le 2 de chaque mois à 6h UTC (8h Paris hiver, 7h été)
+  workflow_dispatch:      # Permet de lancer manuellement depuis GitHub
+
+jobs:
+  run-analytics-sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install poetry
+          poetry config virtualenvs.create false
+          poetry install
+
+      - name: Sync VCOM analytics → Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          VCOM_API_KEY: ${{ secrets.VCOM_API_KEY }}
+          VCOM_USERNAME: ${{ secrets.VCOM_USERNAME }}
+          VCOM_PASSWORD: ${{ secrets.VCOM_PASSWORD }}
+        run: |
+          poetry run python -m vysync.cli_analytics --last-month
