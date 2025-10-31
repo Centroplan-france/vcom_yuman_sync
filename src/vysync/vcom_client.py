@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from datetime import datetime
 from typing import Any, Dict, List
 import json
 import requests
@@ -283,3 +284,67 @@ class VCOMAPIClient:
     def delete_outage(self, ticket_id: str) -> bool:
         resp = self._make_request("DELETE", f"/tickets/{ticket_id}/outage")
         return resp.status_code == 204
+
+    # ------------------------------------------------------------------ #
+    # Power Plant Controllers (PPC)                                       #
+    # ------------------------------------------------------------------ #
+    def get_power_plant_controllers(self, system_key: str) -> List[Dict[str, Any]]:
+        """Récupère la liste des power plant controllers du site."""
+        return self._make_request(
+            "GET",
+            f"/systems/{system_key}/power-plant-controllers"
+        ).json().get("data", [])
+
+    def get_ppc_abbreviations(self, system_key: str, device_id: str) -> List[str]:
+        """Récupère la liste des IDs d'abréviations disponibles pour un PPC."""
+        return self._make_request(
+            "GET",
+            f"/systems/{system_key}/power-plant-controllers/{device_id}/abbreviations"
+        ).json().get("data", [])
+
+    def get_ppc_abbreviation_info(
+        self,
+        system_key: str,
+        device_id: str,
+        abbreviation_id: str
+    ) -> Dict[str, Any]:
+        """Récupère les métadonnées d'une abréviation PPC (description, unité, précision, agrégation)."""
+        return self._make_request(
+            "GET",
+            f"/systems/{system_key}/power-plant-controllers/{device_id}/abbreviations/{abbreviation_id}"
+        ).json().get("data", {})
+
+    def get_ppc_measurements(
+        self,
+        system_key: str,
+        device_id: str,
+        abbreviation_id: str,
+        from_time: datetime,
+        to_time: datetime,
+        resolution: str = "interval"
+    ) -> Dict[str, Any]:
+        """
+        Récupère les mesures d'une abréviation PPC sur une période donnée.
+
+        Args:
+            system_key: Clé du système
+            device_id: ID du power plant controller
+            abbreviation_id: ID de l'abréviation
+            from_time: Date/heure de début
+            to_time: Date/heure de fin
+            resolution: Résolution des mesures (interval, minute, fifteen-minutes,
+                       thirty-minutes, hour, day, month, year)
+
+        Returns:
+            Dictionnaire avec les mesures
+        """
+        params = {
+            "from": from_time.isoformat(),
+            "to": to_time.isoformat(),
+            "resolution": resolution
+        }
+        return self._make_request(
+            "GET",
+            f"/systems/{system_key}/power-plant-controllers/{device_id}/abbreviations/{abbreviation_id}/measurements",
+            params=params
+        ).json().get("data", {})
