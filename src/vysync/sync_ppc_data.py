@@ -5,7 +5,7 @@ Module de synchronisation des données PPC (Power Plant Controllers).
 Récupère hebdomadairement la consigne de puissance active (PPC_P_SET_ABS)
 depuis VCOM et la stocke dans Supabase.
 
-Fréquence recommandée : Une fois par semaine (suggéré : lundi)
+Fréquence recommandée : Une fois par semaine (suggéré : samedi)
 Période de mesure : Veille à 18h-19h UTC (données consolidées)
 
 Usage:

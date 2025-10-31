@@ -139,7 +139,7 @@ def main():
     """Point d'entrée principal"""
     
     # Sites de test
-    test_sites = ["8QECV", "GQRRQ", "P9YL5", "RBGM6"]
+    test_sites = ["K46XE", "991S7", "JG9P2", "RPSSB"]
     
     print("="*60)
     print("EXPLORATION DES POWER PLANT CONTROLLERS")
