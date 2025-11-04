@@ -582,6 +582,12 @@ class YumanAdapter:
 
         # ─────────────────────────  MISE À JOUR  ───────────────────────── #
         for old, new in patch.update:
+            # Skip UPDATE pour les SIM (seule la création est autorisée)
+            if old.category_id == CAT_SIM:
+                logger.debug("[YUMAN] skip update for SIM %s (Yuman is source of truth)",
+                             old.serial_number)
+                continue
+
             # back‑fill yuman_material_id si manquant
             if new.yuman_material_id is None and old.yuman_material_id:
                 if new.serial_number:
