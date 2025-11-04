@@ -142,10 +142,12 @@ class YumanAdapter:
           else:
               commission_iso = raw_cd or None     # "" → None
   
-          # --- Construction de l’objet Site
+          # --- Construction de l'objet Site
           site_obj = Site(
-              id              = self.sb._map_yid_to_id.get(yuman_site_id),
               name            = s.get("name"),
+              vcom_system_key = vcom_key,      # peut être NULL ou rempli si déjà mappé
+              yuman_site_id   = yuman_site_id,  # identifiant Yuman
+              id              = self.sb._map_yid_to_id.get(yuman_site_id),
               address         = s.get("address"),
               commission_date = commission_iso,
               nominal_power   = (

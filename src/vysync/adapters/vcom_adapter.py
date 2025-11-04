@@ -54,8 +54,10 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
 
         # --- Site ----------------------------------------------------------------
         site = Site(
-            id              = vcom_to_site_id.get(key) if vcom_to_site_id else None,
             name            = sys.get("name") or key,
+            vcom_system_key = key,  # identifiant VCOM
+            yuman_site_id   = None,  # NULL pour sites VCOM
+            id              = vcom_to_site_id.get(key) if vcom_to_site_id else None,
             latitude        = det.get("coordinates", {}).get("latitude"),
             longitude       = det.get("coordinates", {}).get("longitude"),
             nominal_power   = tech.get("nominalPower"),
