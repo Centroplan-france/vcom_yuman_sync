@@ -138,13 +138,7 @@ def _equip_equals(a: Equipment, b: Equipment, ignore_fields: Optional[Set[str]] 
             da.pop(field, None)
             db.pop(field, None)
 
-    # ✅ RÈGLE MÉTIER : Si target (b/db) a None, ignorer ce champ dans la comparaison
-    # On copie la valeur de current (a/da) pour que la comparaison retourne True
-    for key in list(db.keys()):
-        if db[key] is None and key in da:
-            db[key] = da[key]  # ← considérer qu'il n'y a pas de changement
-
-    # Normalisation
+    # Normalisation AVANT la règle métier
     for d in (da, db):
         for key in ("brand", "model", "serial_number", "parent_id"):
             if d.get(key) is None:
@@ -152,6 +146,14 @@ def _equip_equals(a: Equipment, b: Equipment, ignore_fields: Optional[Set[str]] 
             elif isinstance(d[key], str):
                 d[key] = d[key].strip()
         d["count"] = int(d.get("count") or 0)
+
+    # ✅ RÈGLE MÉTIER : Si target (nouveau) a une valeur vide, copier l'ancienne
+    # Cela empêche d'écraser des données valides par des valeurs vides
+    for key in list(db.keys()):
+        if db[key] in (None, "") and da[key] not in (None, ""):
+            # La cible est vide MAIS l'ancienne valeur est valide → on garde l'ancienne
+            db[key] = da[key]
+            logger.debug(f"🛡️  Protection : champ '{key}' conservé (ancien={da[key]!r})")
 
     cat = da.get("category_id")
 
