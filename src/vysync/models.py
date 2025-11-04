@@ -13,6 +13,8 @@ from typing import Any, Dict, Optional
 @dataclass(frozen=True)
 class Site:
     name: str
+    vcom_system_key: Optional[str] = None           # clé VCOM (peut être NULL)
+    yuman_site_id: Optional[int] = None             # clé Yuman (peut être NULL)
     id: Optional[int] = None
     client_map_id: Optional[int] = None
     code: Optional[int] = None                      # code yuman
