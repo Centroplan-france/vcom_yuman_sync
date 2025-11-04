@@ -37,6 +37,7 @@ from vysync.adapters.yuman_adapter import YumanAdapter
 from vysync.vcom_client import VCOMAPIClient
 from vysync.diff import diff_entities, diff_fill_missing, set_parent_map, PatchSet
 from vysync.conflict_resolution import detect_and_resolve_site_conflicts, resolve_clients_for_sites
+from vysync.models import CAT_SIM
 
 # ─────────────────────────── Logger ────────────────────────────
 # Logger will be configured by setup_logging() in main()
@@ -235,7 +236,8 @@ def sync_full(
     patch_maps_sites  = diff_fill_missing(db_maps_sites,  y_sites, fields=["yuman_site_id","code", "client_map_id", "name",  "aldi_id","aldi_store_id","project_number_cp","commission_date","nominal_power"])
 
     patch_maps_equips = diff_fill_missing(db_maps_equips, y_equips, fields=["category_id","eq_type", "name", "yuman_material_id",
-                                                                          "serial_number","brand","model","count","parent_id"])
+                                                                          "serial_number","brand","model","count","parent_id"],
+                                          force_update_categories=[CAT_SIM])
 
     logger.info(
         "[YUMAN→DB] Clients Δ +%d  ~%d  -%d",

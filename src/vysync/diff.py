@@ -261,11 +261,17 @@ def diff_fill_missing(
     skip_categories: Optional[List[int]] = None,
     skip_obsolete: bool = False,
     category_field_exclusions: Optional[Dict[int, List[str]]] = None,
+    force_update_categories: Optional[List[int]] = None,
 ) -> PatchSet[T]:
     """
     Complète uniquement les champs vides spécifiés, avec requalification
     ADD→UPDATE si on retrouve l'objet par serial_number ou yuman_material_id.
     Refuse les ADD avec serial vide.
+
+    :param force_update_categories: Liste de category_id pour lesquels on force
+        la mise à jour de TOUS les champs spécifiés (même non-vides), au lieu
+        du comportement fill-missing par défaut. Utile quand la source de vérité
+        est l'autre système (ex: Yuman pour les SIM).
     """
     # 0) index secondaires (indépendants de la clé 'key' du dict)
     db_by_serial = {
@@ -286,6 +292,7 @@ def diff_fill_missing(
     ]
     skip_cats = set(skip_categories or [])
     excl_map  = category_field_exclusions or {}
+    force_cats = set(force_update_categories or [])
 
     add: List[T] = []
     upd: List[Tuple[T, T]] = []
@@ -349,10 +356,18 @@ def diff_fill_missing(
             d_src = asdict(src)
 
             # Identifier les champs manquants à remplir
-            missing = [
-                f for f in to_check
-                if _is_missing(d_db.get(f)) and not _is_missing(d_src.get(f))
-            ]
+            if cat in force_cats:
+                # Force update : tous les champs de to_check où source diffère de DB et source non vide
+                missing = [
+                    f for f in to_check
+                    if (d_db.get(f) or "") != (d_src.get(f) or "") and not _is_missing(d_src.get(f))
+                ]
+            else:
+                # Fill-missing normal : uniquement les champs vides en DB et source non vide
+                missing = [
+                    f for f in to_check
+                    if _is_missing(d_db.get(f)) and not _is_missing(d_src.get(f))
+                ]
 
             if missing:
                 # ✅ PROTECTION : ne jamais écraser une valeur DB non-vide avec une valeur source vide
