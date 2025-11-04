@@ -114,7 +114,9 @@ class SupabaseAdapter:
                 continue
             sites[r["vcom_system_key"]] = Site(
                 id=r["id"],
-                name=r.get("name") or r["vcom_system_key"],
+                name=r.get("name"),
+                vcom_system_key=r["vcom_system_key"],  
+                yuman_site_id=r.get("yuman_site_id"),
                 latitude=r.get("latitude"),
                 longitude=r.get("longitude"),
                 nominal_power=r.get("nominal_power"),
@@ -135,7 +137,9 @@ class SupabaseAdapter:
                 continue
             sites[r["yuman_site_id"]] = Site(
                 id=r["id"],
-                name=r.get("name") or r.get("vcom_system_key") or str(r.get("yuman_site_id")),
+                name=r.get("name"),
+                vcom_system_key=r["vcom_system_key"],  
+                yuman_site_id=r.get("yuman_site_id"),
                 latitude=r.get("latitude"),
                 longitude=r.get("longitude"),
                 nominal_power=r.get("nominal_power"),
