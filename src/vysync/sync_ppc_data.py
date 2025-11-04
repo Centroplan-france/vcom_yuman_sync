@@ -2,8 +2,11 @@
 """
 Module de synchronisation des données PPC (Power Plant Controllers).
 
-Récupère hebdomadairement la consigne de puissance active (PPC_P_SET_ABS)
-depuis VCOM et la stocke dans Supabase.
+Récupère hebdomadairement la consigne de puissance active depuis VCOM et la stocke
+dans Supabase. Utilise un système de fallback automatique :
+1. PPC_P_SET_ABS (en W) si disponible
+2. PPC_P_SET_GRIDOP_REL (en %) sinon
+3. PPC_P_SET_REL (en %) en dernier recours
 
 Fréquence recommandée : Une fois par semaine (suggéré : samedi)
 Période de mesure : Veille à 18h-19h UTC (données consolidées)
@@ -22,7 +25,12 @@ from vysync.adapters.supabase_adapter import SupabaseAdapter
 logger = logging.getLogger(__name__)
 
 # Constantes
-PPC_ABBREVIATION = "PPC_P_SET_ABS"  # Absolute active power setpoint
+# Ordre de priorité des abréviations PPC (du plus précis au moins précis)
+PPC_ABBREVIATIONS_PRIORITY = [
+    "PPC_P_SET_ABS",         # Valeur absolue en W (préféré)
+    "PPC_P_SET_GRIDOP_REL",  # Valeur relative en % (fallback 1)
+    "PPC_P_SET_REL"          # Valeur relative en % (fallback 2)
+]
 MEASUREMENT_HOUR_START = 18  # 18h UTC
 MEASUREMENT_DURATION = 1  # 1 heure
 
@@ -54,10 +62,16 @@ def get_measurement_period() -> tuple[datetime, datetime]:
 
 def fetch_ppc_setpoint(
     vc: VCOMAPIClient,
-    system_key: str
+    system_key: str,
+    nominal_power: Optional[float]
 ) -> Dict[str, Any]:
     """
-    Récupère la consigne PPC_P_SET_ABS pour un site.
+    Récupère la consigne PPC pour un site avec fallback automatique.
+
+    Utilise un système de priorité pour choisir la meilleure abréviation disponible :
+    1. PPC_P_SET_ABS (valeur absolue en W) - préféré
+    2. PPC_P_SET_GRIDOP_REL (valeur relative en %) - fallback 1
+    3. PPC_P_SET_REL (valeur relative en %) - fallback 2
 
     Gère trois cas distincts :
     - no_ppc : Aucun controller PPC trouvé sur le site
@@ -67,6 +81,7 @@ def fetch_ppc_setpoint(
     Args:
         vc: Client VCOM API
         system_key: Clé du système VCOM (ex: "WC6HQ")
+        nominal_power: Puissance nominale du site en W (nécessaire pour conversion % → kW)
 
     Returns:
         Dict avec l'une des structures suivantes :
@@ -80,7 +95,7 @@ def fetch_ppc_setpoint(
           }} si données OK
 
     Example:
-        >>> result = fetch_ppc_setpoint(vc, "WC6HQ")
+        >>> result = fetch_ppc_setpoint(vc, "WC6HQ", 5000.0)
         >>> if result["status"] == "ok":
         ...     print(f"Setpoint: {result['data']['setpoint_kw']} kW")
     """
@@ -98,20 +113,37 @@ def fetch_ppc_setpoint(
         controller_id = controller["id"]
         logger.debug("Site %s: Found PPC controller %s", system_key, controller_id)
 
-        # 2. Récupérer la période de mesure
+        # 2. Lister les abréviations disponibles pour ce controller
+        available_abbreviations = vc.get_ppc_abbreviations(system_key, controller_id)
+        logger.debug("Site %s: Available abbreviations: %s", system_key, available_abbreviations)
+
+        # 3. Déterminer quelle abréviation utiliser (ordre de priorité)
+        target_abbr = None
+        for abbr in PPC_ABBREVIATIONS_PRIORITY:
+            if abbr in available_abbreviations:
+                target_abbr = abbr
+                logger.debug("Site %s: Using abbreviation %s", system_key, target_abbr)
+                break
+
+        if target_abbr is None:
+            logger.warning("Site %s: No relevant PPC abbreviation found in %s",
+                         system_key, available_abbreviations)
+            return {"status": "no_data"}
+
+        # 4. Récupérer la période de mesure
         from_time, to_time = get_measurement_period()
 
-        # 3. Récupérer les mesures pour PPC_P_SET_ABS
+        # 5. Récupérer les mesures pour l'abréviation choisie
         measurements = vc.get_ppc_measurements(
             system_key=system_key,
             device_id=controller_id,
-            abbreviation_id=PPC_ABBREVIATION,
+            abbreviation_id=target_abbr,
             from_time=from_time,
             to_time=to_time,
             resolution="interval"
         )
 
-        # 4. Vérifier si des mesures existent
+        # 6. Vérifier si des mesures existent
         recent_measurement = measurements.get("recent_measurement")
 
         # CAS 2 : PPC existe mais pas de mesure (perte de communication)
@@ -129,8 +161,22 @@ def fetch_ppc_setpoint(
                           system_key, controller_id)
             return {"status": "no_data"}
 
-        # Conversion W → kW
-        setpoint_kw = measurement_value / 1000.0
+        # 7. Convertir la valeur en kW selon la source
+        if target_abbr == "PPC_P_SET_ABS":
+            # Valeur absolue : W → kW
+            setpoint_kw = measurement_value / 1000.0
+            logger.debug("Site %s: Converted from W to kW: %.2f", system_key, setpoint_kw)
+        else:
+            # Valeur relative : % → kW (nécessite nominal_power)
+            if nominal_power is None or nominal_power <= 0:
+                logger.warning("Site %s: nominal_power is %s, cannot calculate kW from percentage",
+                             system_key, nominal_power)
+                return {"status": "no_data"}
+
+            # Calcul : (nominal_power × % / 100) / 1000 → kW
+            setpoint_kw = (nominal_power * measurement_value / 100.0) / 1000.0
+            logger.debug("Site %s: Converted from %% to kW: %.2f%% × %.2f kW = %.2f kW",
+                       system_key, measurement_value, nominal_power / 1000.0, setpoint_kw)
 
         logger.info("Site %s: PPC setpoint = %.2f kW (timestamp: %s)",
                    system_key, setpoint_kw, measurement_timestamp)
@@ -245,7 +291,7 @@ def sync_all_sites() -> None:
     # Récupérer tous les sites avec vcom_system_key
     try:
         result = sb.sb.table("sites_mapping")\
-            .select("id, vcom_system_key, name")\
+            .select("id, vcom_system_key, name, nominal_power")\
             .not_.is_("vcom_system_key", "null")\
             .execute()
 
@@ -271,12 +317,15 @@ def sync_all_sites() -> None:
         site_id = site["id"]
         system_key = site["vcom_system_key"]
         site_name = site.get("name") or system_key
+        nominal_power = site.get("nominal_power")  # Peut être None
 
         try:
-            logger.info("Processing site %d (%s - %s)", site_id, system_key, site_name)
+            logger.info("Processing site %d (%s - %s, nominal_power=%.2f kW)",
+                      site_id, system_key, site_name,
+                      nominal_power / 1000.0 if nominal_power else 0)
 
             # Récupérer les données PPC
-            ppc_data = fetch_ppc_setpoint(vc, system_key)
+            ppc_data = fetch_ppc_setpoint(vc, system_key, nominal_power)
 
             # Mettre à jour la base de données
             update_site_ppc_data(sb, site_id, ppc_data)
@@ -323,7 +372,7 @@ def main() -> None:
     )
 
     logger.info("PPC Data Synchronization Module")
-    logger.info("Metric: %s (Absolute active power setpoint)", PPC_ABBREVIATION)
+    logger.info("Metrics (priority order): %s", " > ".join(PPC_ABBREVIATIONS_PRIORITY))
     logger.info("Measurement period: Yesterday %dh-%dh UTC",
                MEASUREMENT_HOUR_START, MEASUREMENT_HOUR_START + MEASUREMENT_DURATION)
 
