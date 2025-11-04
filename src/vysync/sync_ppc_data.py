@@ -143,12 +143,41 @@ def fetch_ppc_setpoint(
             resolution="interval"
         )
 
-        # 6. Vérifier si des mesures existent
-        recent_measurement = measurements.get("recent_measurement")
+        # 6. Vérifier si des mesures existent et les parser correctement
+        # Structure de la réponse : {controller_id: {abbr_id: [list]}}
 
-        # CAS 2 : PPC existe mais pas de mesure (perte de communication)
+        if not measurements:
+            logger.info("Site %s: Empty response from API (no data for period)", system_key)
+            return {"status": "no_data"}
+
+        # Extraire les mesures du controller
+        if controller_id not in measurements:
+            logger.info("Site %s: Controller %s not in measurements response",
+                       system_key, controller_id)
+            return {"status": "no_data"}
+
+        controller_measurements = measurements[controller_id]
+
+        # Extraire les mesures de l'abréviation
+        if target_abbr not in controller_measurements:
+            logger.info("Site %s: Abbreviation %s not in controller measurements",
+                       system_key, target_abbr)
+            return {"status": "no_data"}
+
+        measurements_list = controller_measurements[target_abbr]
+
+        # Vérifier que la liste n'est pas vide
+        if not isinstance(measurements_list, list) or len(measurements_list) == 0:
+            logger.info("Site %s: No measurements in list for %s",
+                       system_key, target_abbr)
+            return {"status": "no_data"}
+
+        # Prendre la dernière mesure
+        recent_measurement = measurements_list[-1]
+
+        # CAS 2 : Mesure existe mais valeur est None
         if recent_measurement is None:
-            logger.info("Site %s: PPC %s exists but no measurement (communication loss)",
+            logger.info("Site %s: PPC %s exists but measurement is None",
                        system_key, controller_id)
             return {"status": "no_data"}
 
