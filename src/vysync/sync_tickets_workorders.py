@@ -159,7 +159,7 @@ def assign_tickets_to_active_workorders(
             .select("*")
             .eq("system_key", system_key)
             .not_.in_("status", ["assigned", "inProgress", "closed", "deleted"])
-            .not_.in_("priority", "low")
+            .not_.in_("priority", ["low"])
             .is_("yuman_workorder_id", None)
             .execute()
         )
@@ -223,6 +223,12 @@ def create_workorders_for_priority_sites(
             ).data
             if row:
                 site_id = row[0]["yuman_site_id"]
+                if site_id is None:
+                    logger.debug(
+                        "Ignoré ticket %s sans yuman_site_id dans sites_mapping",
+                        t.get("id") or t.get("vcom_ticket_id"),
+                    )
+                    continue
                 by_site.setdefault(site_id, []).append(t)
 
     for site_id, ts in by_site.items():

@@ -158,58 +158,58 @@ def sync_full(
     logger.info("⚠️  Ce mode est LENT (~25 min) - utilisé pour audit hebdomadaire")
     logger.info("=" * 70)
     
-    # # ─────────────────────────────────────────────────────────────────
-    # # PHASE 1 A – VCOM → Supabase
-    # # ─────────────────────────────────────────────────────────────────
-    # db_sites = sb.fetch_sites_v(site_key=site_key)
-    # db_equips = sb.fetch_equipments_v(site_key=site_key)
+    # ─────────────────────────────────────────────────────────────────
+    # PHASE 1 A – VCOM → Supabase
+    # ─────────────────────────────────────────────────────────────────
+    db_sites = sb.fetch_sites_v(site_key=site_key)
+    db_equips = sb.fetch_equipments_v(site_key=site_key)
 
-    # # ✅ CORRECTION : Le mode FULL ne skip JAMAIS (sauf si --site-key spécifique)
-    # # On veut TOUJOURS vérifier tous les sites pour détecter les changements
-    # v_sites, v_equips = fetch_snapshot(
-    #     vc,
-    #     vcom_system_key=site_key,  # None = tous les sites, ou un site spécifique
-    #     skip_keys=None,              # ← JAMAIS skip en mode full
-    #     sb_adapter=sb
-    # )
+    # ✅ CORRECTION : Le mode FULL ne skip JAMAIS (sauf si --site-key spécifique)
+    # On veut TOUJOURS vérifier tous les sites pour détecter les changements
+    v_sites, v_equips = fetch_snapshot(
+        vc,
+        vcom_system_key=site_key,  # None = tous les sites, ou un site spécifique
+        skip_keys=None,              # ← JAMAIS skip en mode full
+        sb_adapter=sb
+    )
     
-    # # Si --site-key spécifié, filtrer APRÈS le fetch
-    # if site_key:
-    #     v_sites = {k: s for k, s in v_sites.items() if k == site_key}
-    #     v_equips = {k: e for k, e in v_equips.items() if e.get_vcom_system_key(sb) == site_key}
+    # Si --site-key spécifié, filtrer APRÈS le fetch
+    if site_key:
+        v_sites = {k: s for k, s in v_sites.items() if k == site_key}
+        v_equips = {k: e for k, e in v_equips.items() if e.get_vcom_system_key(sb) == site_key}
 
-    #     # Filtrer aussi la DB pour ne comparer que ce site
-    #     db_sites = {k: s for k, s in db_sites.items() if k == site_key}
-    #     db_equips = {k: e for k, e in db_equips.items() if e.get_vcom_system_key(sb) == site_key}
+        # Filtrer aussi la DB pour ne comparer que ce site
+        db_sites = {k: s for k, s in db_sites.items() if k == site_key}
+        db_equips = {k: e for k, e in db_equips.items() if e.get_vcom_system_key(sb) == site_key}
 
-    # # Diff & patch
-    # patch_sites = diff_entities(
-    #     db_sites, v_sites, 
-    #     ignore_fields={"yuman_site_id", "client_map_id", "code", "ignore_site"}
-    # )
-    # patch_equips = diff_entities(
-    #     db_equips, v_equips, 
-    #     ignore_fields={"yuman_material_id", "parent_id"}
-    # )
+    # Diff & patch
+    patch_sites = diff_entities(
+        db_sites, v_sites, 
+        ignore_fields={"yuman_site_id", "client_map_id", "code", "ignore_site"}
+    )
+    patch_equips = diff_entities(
+        db_equips, v_equips, 
+        ignore_fields={"yuman_material_id", "parent_id"}
+    )
 
-    # logger.info(
-    #     "[VCOM→DB] Sites  Δ  +%d  ~%d  -%d",
-    #     len(patch_sites.add),
-    #     len(patch_sites.update),
-    #     len(patch_sites.delete),
-    # )
-    # logger.info(
-    #     "[VCOM→DB] Equips Δ  +%d  ~%d  -%d",
-    #     len(patch_equips.add),
-    #     len(patch_equips.update),
-    #     len(patch_equips.delete),
-    # )
+    logger.info(
+        "[VCOM→DB] Sites  Δ  +%d  ~%d  -%d",
+        len(patch_sites.add),
+        len(patch_sites.update),
+        len(patch_sites.delete),
+    )
+    logger.info(
+        "[VCOM→DB] Equips Δ  +%d  ~%d  -%d",
+        len(patch_equips.add),
+        len(patch_equips.update),
+        len(patch_equips.delete),
+    )
     
-    # while input("Écrivez 'oui' pour continuer : ").strip().lower() != "oui":
-    #     pass
+    while input("Écrivez 'oui' pour continuer : ").strip().lower() != "oui":
+        pass
 
-    # sb.apply_sites_patch(patch_sites)
-    # sb.apply_equips_patch(patch_equips)
+    sb.apply_sites_patch(patch_sites)
+    sb.apply_equips_patch(patch_equips)
 
     # ─────────────────────────────────────────────────────────────────
     # PHASE 1 B – YUMAN → Supabase (mapping)
