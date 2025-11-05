@@ -46,6 +46,30 @@ def parse_args() -> argparse.Namespace:
 # Helpers d'upsert (DB ⇆ Supabase)
 
 def upsert_tickets(sb, tickets: List[Dict[str, Any]], *, dry: bool = False) -> None:
+    # Récupérer l'ensemble des vcom_system_key valides dans sites_mapping
+    valid_system_keys_result = sb.table("sites_mapping").select("vcom_system_key").execute()
+    valid_system_keys = {row["vcom_system_key"] for row in valid_system_keys_result.data if row["vcom_system_key"] is not None}
+
+    # Filtrer les tickets pour ne garder que ceux avec un systemKey valide
+    valid_tickets = []
+    ignored_tickets = []
+
+    for t in tickets:
+        system_key = t.get("systemKey")
+        if system_key in valid_system_keys:
+            valid_tickets.append(t)
+        else:
+            ignored_tickets.append(t)
+
+    # Logger les tickets ignorés
+    if ignored_tickets:
+        ignored_ids = [t.get("id") for t in ignored_tickets]
+        logger.warning(
+            "%d tickets ignorés (system_key non présent dans sites_mapping): %s",
+            len(ignored_tickets),
+            ignored_ids
+        )
+
     rows = [
         {
             "vcom_ticket_id": t["id"],
@@ -56,7 +80,7 @@ def upsert_tickets(sb, tickets: List[Dict[str, Any]], *, dry: bool = False) -> N
             "priority": t.get("priority"),
             "last_changed_at": t.get("lastChangedAt"),
         }
-        for t in tickets
+        for t in valid_tickets
     ]
 
     if not rows:
@@ -69,6 +93,30 @@ def upsert_tickets(sb, tickets: List[Dict[str, Any]], *, dry: bool = False) -> N
         logger.info("%d tickets upsertés", len(rows))
 
 def upsert_workorders(sb, orders: List[Dict[str, Any]], *, dry: bool = False) -> None:
+    # Récupérer l'ensemble des yuman_site_id valides dans sites_mapping
+    valid_site_ids_result = sb.table("sites_mapping").select("yuman_site_id").execute()
+    valid_site_ids = {row["yuman_site_id"] for row in valid_site_ids_result.data if row["yuman_site_id"] is not None}
+
+    # Filtrer les workorders pour ne garder que ceux avec un site_id valide
+    valid_orders = []
+    ignored_orders = []
+
+    for w in orders:
+        site_id = w.get("site_id")
+        if site_id in valid_site_ids:
+            valid_orders.append(w)
+        else:
+            ignored_orders.append(w)
+
+    # Logger les workorders ignorés
+    if ignored_orders:
+        ignored_ids = [w.get("id") for w in ignored_orders]
+        logger.warning(
+            "%d work_orders ignorés (site_id non présent dans sites_mapping): %s",
+            len(ignored_orders),
+            ignored_ids
+        )
+
     rows = [
         {
             "workorder_id": w["id"],
@@ -79,7 +127,7 @@ def upsert_workorders(sb, orders: List[Dict[str, Any]], *, dry: bool = False) ->
             "description": w.get("description"),
             "title": w.get("title"),
         }
-        for w in orders
+        for w in valid_orders
     ]
 
     if not rows:
