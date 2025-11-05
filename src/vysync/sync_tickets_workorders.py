@@ -255,6 +255,10 @@ def create_workorders_for_priority_sites(
     *,
     dry: bool = False,
 ) -> None:
+    # Récupérer l'ensemble des yuman_site_id valides dans sites_mapping
+    valid_site_ids_result = sb.table("sites_mapping").select("yuman_site_id").execute()
+    valid_site_ids = {row["yuman_site_id"] for row in valid_site_ids_result.data if row["yuman_site_id"] is not None}
+
     active_sites = {
         w["site_id"] for w in workorders if w.get("status", "").lower() != "closed"
     }
@@ -280,6 +284,14 @@ def create_workorders_for_priority_sites(
                 by_site.setdefault(site_id, []).append(t)
 
     for site_id, ts in by_site.items():
+        # Ignorer les sites non présents dans sites_mapping
+        if site_id not in valid_site_ids:
+            logger.warning(
+                "Site %s ignoré lors de création WO (yuman_site_id non présent dans sites_mapping)",
+                site_id
+            )
+            continue
+
         if site_id in active_sites:
             continue  # déjà un WO actif
 
