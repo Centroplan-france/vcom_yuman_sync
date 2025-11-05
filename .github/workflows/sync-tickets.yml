@@ -24,77 +24,7 @@ jobs:
           poetry config virtualenvs.create false
           poetry install
 
-      - name: Sync Yuman → Supabase mappings
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          YUMAN_TOKEN: ${{ secrets.YUMAN_TOKEN }}
-          VCOM_API_KEY: ${{ secrets.VCOM_API_KEY }}
-          VCOM_USERNAME: ${{ secrets.VCOM_USERNAME }}
-          VCOM_PASSWORD: ${{ secrets.VCOM_PASSWORD }}
-        run: |
-          poetry run python - << 'EOF'
-          import logging
-          from vysync.adapters.supabase_adapter import SupabaseAdapter
-          from vysync.adapters.yuman_adapter     import YumanAdapter
-          from vysync.diff                       import diff_fill_missing
-
-          # logger
-          logging.basicConfig(
-              level=logging.INFO,
-              format='%(levelname)s | %(message)s'
-          )
-          logger = logging.getLogger(__name__)
-
-          # 1) snapshot Yuman
-          sb = SupabaseAdapter()
-          y  = YumanAdapter(sb)
-          logger.info("[YUMAN→DB] snapshot & patch fill-missing …")
-          y_clients_raw = list(y.yc.list_clients())
-          y_sites   = y.fetch_sites()
-
-          # 2) mappings existants en base
-          db_clients      = sb.fetch_clients()
-          db_maps_sites   = sb.fetch_sites_y()
-
-          from vysync.adapters.supabase_adapter import Client
-
-          def to_client(row: dict) -> Client:
-              return Client(
-                  yuman_client_id = row["id"],
-                  name            = row.get("name"),
-                  code            = row.get("code"),
-                  # privilégie l'adresse « address », sinon fallback sur « billing_address »
-                  address         = row.get("address") or row.get("billing_address")
-              )
-          
-          y_clients = { r["id"]: to_client(r) for r in y_clients_raw }
-
-
-          # 3) diff « fill missing »
-          patch_clients    = diff_fill_missing(db_clients,    y_clients)
-          patch_maps_sites  = diff_fill_missing(db_maps_sites,  y_sites,  fields=[
-              "yuman_site_id","code","client_map_id","name",
-              "aldi_id","aldi_store_id","project_number_cp",
-              "commission_date","nominal_power"
-          ])
-
-          logger.info(
-              "[YUMAN→DB] Clients     Δ +%d  ~%d  -%d",
-              len(patch_clients.add), len(patch_clients.update), len(patch_clients.delete),
-          )
-          logger.info(
-              "[YUMAN→DB] SitesMapping  Δ +%d  ~%d  -%d",
-              len(patch_maps_sites.add), len(patch_maps_sites.update), len(patch_maps_sites.delete),
-          )
-
-          # 4) application des patchs
-          sb.apply_clients_mapping_patch(patch_clients)
-          sb.apply_sites_patch(patch_maps_sites)
-          EOF
-
-      - name: Run script
+      - name: Sync tickets & workorders
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
