@@ -316,35 +316,48 @@ def sync_new_sites_and_names() -> dict:
                 site = v_sites[key]
                 site_with_client = replace(site, client_map_id=client_id)
 
-                # ── D. INSERTION DANS SUPABASE ──
-                # Ordre important :
-                # 1. D'abord le site (crée l'entrée dans sites_mapping)
-                # 2. Ensuite les équipements (ils référencent site_id via FK)
-                logger.info("  • Insertion en base de données...")
-
-                # Insertion du site via PatchSet
-                # PatchSet(add=[...], update=[], delete=[])
+                # ── D. INSERTION DU SITE DANS SUPABASE ──
+                logger.info("  • Insertion du site en base de données...")
                 sb.apply_sites_patch(
                     PatchSet(add=[site_with_client], update=[], delete=[])
                 )
 
-                # Insertion des équipements via PatchSet
-                # v_equips est un dict, on prend les values pour avoir la liste
+                # ── E. RÉCUPÉRATION DU site_id GÉNÉRÉ PAR SUPABASE ──
+                # Nécessaire pour assigner le site_id aux équipements avant insertion
+                result = sb.sb.table("sites_mapping") \
+                              .select("id") \
+                              .eq("vcom_system_key", key) \
+                              .single() \
+                              .execute()
+                new_site_id = result.data["id"]
+                logger.info("  • Site créé avec id=%d", new_site_id)
+
+                # ── F. MISE À JOUR DES ÉQUIPEMENTS AVEC LE SITE_ID ──
+                # IMPORTANT : Equipment est une dataclass frozen=True
+                # Il faut utiliser dataclasses.replace() pour créer de nouvelles instances
+                equips_with_site_id = []
+                for eq in v_equips.values():
+                    eq_updated = replace(eq, site_id=new_site_id)
+                    equips_with_site_id.append(eq_updated)
+
+                # ── G. INSERTION DES ÉQUIPEMENTS ──
+                logger.info("  • Insertion des %d équipements...", len(equips_with_site_id))
                 sb.apply_equips_patch(
-                    PatchSet(add=list(v_equips.values()), update=[], delete=[])
+                    PatchSet(add=equips_with_site_id, update=[], delete=[])
                 )
 
-                # ── E. LOGGING DU SUCCÈS ──
+                # ── H. LOGGING DU SUCCÈS ──
                 # Ajout à la liste des sites créés (pour le rapport JSON)
                 new_sites_created.append({
                     "vcom_system_key": key,
                     "name": vcom_name,
                     "client_id": client_id,
+                    "site_id": new_site_id,
                     "equipments_count": len(v_equips),
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 })
 
-                logger.info("  ✓ Site créé avec succès")
+                logger.info("  ✓ Site et %d équipements créés avec succès", len(v_equips))
 
             except Exception as e:
                 # ── F. GESTION DES ERREURS ──
