@@ -1,0 +1,14 @@
+{
+  "execution_date": "2025-11-28T16:29:50.509116+00:00",
+  "summary": {
+    "new_sites_detected": 0,
+    "new_sites_created": 0,
+    "new_sites_failed": 0,
+    "name_changes_detected": 0,
+    "clients_not_found": 0
+  },
+  "new_sites_created": [],
+  "new_sites_errors": [],
+  "name_changes": [],
+  "client_warnings": []
+}

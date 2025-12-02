@@ -348,3 +348,33 @@ class VCOMAPIClient:
             f"/systems/{system_key}/power-plant-controllers/{device_id}/abbreviations/{abbreviation_id}/measurements",
             params=params
         ).json().get("data", {})
+    
+    def get_bulk_measurements(
+        self,
+        abbreviation_id: str,
+        from_date: str,
+        to_date: str,
+        resolution: str = "month"
+    ) -> List[Dict[str, Any]]:
+        """
+        Récupère les mesures d'une abréviation pour TOUS les systèmes (bulk).
+
+        Args:
+            abbreviation_id: ID de l'abréviation (E_Z_EVU, G_M0, PR, VFG)
+            from_date: Date de début ISO (ex: "2025-01-01T00:00:00+01:00")
+            to_date: Date de fin ISO (ex: "2025-10-31T23:59:59+01:00")
+            resolution: Résolution (day, month, year). Défaut: month
+
+        Returns:
+            Liste de dicts: [{"systemKey": "ABCDE", "<abbrev>": [{"timestamp": ..., "value": ...}]}, ...]
+        """
+        params = {
+            "from": from_date,
+            "to": to_date,
+            "resolution": resolution
+        }
+        return self._make_request(
+            "GET",
+            f"/systems/abbreviations/{abbreviation_id}/measurements",
+            params=params
+        ).json().get("data", [])

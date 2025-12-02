@@ -1,0 +1,159 @@
+{
+  "execution_date": "2025-11-28T16:14:25.069316+00:00",
+  "summary": {
+    "new_sites_detected": 11,
+    "new_sites_created": 11,
+    "new_sites_failed": 0,
+    "name_changes_detected": 6,
+    "clients_not_found": 1
+  },
+  "new_sites_created": [
+    {
+      "vcom_system_key": "DMM7Q",
+      "name": "01 ALDI France Auchy les Mines (Bois Grenier)",
+      "client_id": 8,
+      "equipments_count": 27,
+      "timestamp": "2025-11-28T16:14:11.614347+00:00"
+    },
+    {
+      "vcom_system_key": "S4QJX",
+      "name": "01 ALDI France Buxeuil (Bouffere)",
+      "client_id": 15,
+      "equipments_count": 20,
+      "timestamp": "2025-11-28T16:14:12.865250+00:00"
+    },
+    {
+      "vcom_system_key": "6TDPM",
+      "name": "01 ALDI France Davézieux (Saint Oblas)",
+      "client_id": 16,
+      "equipments_count": 29,
+      "timestamp": "2025-11-28T16:14:14.399635+00:00"
+    },
+    {
+      "vcom_system_key": "D4WQL",
+      "name": "01 ALDI France Frignicourt (Reims)",
+      "client_id": 13,
+      "equipments_count": 29,
+      "timestamp": "2025-11-28T16:14:15.792436+00:00"
+    },
+    {
+      "vcom_system_key": "43XEY",
+      "name": "01 ALDI France Janze (Bouffere)",
+      "client_id": 15,
+      "equipments_count": 2,
+      "timestamp": "2025-11-28T16:14:16.733715+00:00"
+    },
+    {
+      "vcom_system_key": "Q9YC9",
+      "name": "01 ALDI France Louvroil (Cuincy)",
+      "client_id": 2,
+      "equipments_count": 29,
+      "timestamp": "2025-11-28T16:14:18.078126+00:00"
+    },
+    {
+      "vcom_system_key": "8D878",
+      "name": "01 ALDI France Nevers (Beaune)",
+      "client_id": 6,
+      "equipments_count": 4,
+      "timestamp": "2025-11-28T16:14:19.382870+00:00"
+    },
+    {
+      "vcom_system_key": "PPWN2",
+      "name": "01 ALDI France Puttelange aux Lacs (Ennery)",
+      "client_id": 3,
+      "equipments_count": 28,
+      "timestamp": "2025-11-28T16:14:20.753146+00:00"
+    },
+    {
+      "vcom_system_key": "RAJ71",
+      "name": "01 ALDI France Renaison (Saint Oblas)",
+      "client_id": 16,
+      "equipments_count": 26,
+      "timestamp": "2025-11-28T16:14:21.881209+00:00"
+    },
+    {
+      "vcom_system_key": "56WDM",
+      "name": "01 ALDI France VIHIERS Lys Haut layon",
+      "client_id": null,
+      "equipments_count": 29,
+      "timestamp": "2025-11-28T16:14:23.292724+00:00"
+    },
+    {
+      "vcom_system_key": "1P9RT",
+      "name": "01 ALDI France l'Aigle (Honfleur)",
+      "client_id": 14,
+      "equipments_count": 27,
+      "timestamp": "2025-11-28T16:14:24.722380+00:00"
+    }
+  ],
+  "new_sites_errors": [],
+  "name_changes": [
+    {
+      "vcom_system_key": "GTBUK",
+      "old_name": "ALDI France Anduze (Toulouse)",
+      "new_name": "ALDI France Anduze (Sauvian)",
+      "old_client_region": "Toulouse",
+      "new_client_region": "Sauvian",
+      "old_client_id": 7,
+      "new_client_id": 11,
+      "timestamp": "2025-11-28T16:14:24.815657+00:00"
+    },
+    {
+      "vcom_system_key": "L4HXI",
+      "old_name": "01 ALDI France Bourbon l'Archambault (Beaune)",
+      "new_name": "ALDI France Bourbon l'Archambault (Beaune)",
+      "old_client_region": "Beaune",
+      "new_client_region": "Beaune",
+      "old_client_id": 6,
+      "new_client_id": 6,
+      "timestamp": "2025-11-28T16:14:24.864910+00:00"
+    },
+    {
+      "vcom_system_key": "4672C",
+      "old_name": "01 ALDI France Estrablin (Saint Oblas)",
+      "new_name": "ALDI France Estrablin (Saint Oblas)",
+      "old_client_region": "Saint Oblas",
+      "new_client_region": "Saint Oblas",
+      "old_client_id": 16,
+      "new_client_id": 16,
+      "timestamp": "2025-11-28T16:14:24.920066+00:00"
+    },
+    {
+      "vcom_system_key": "35EG4",
+      "old_name": "01 ALDI France Raches (Cuincy)",
+      "new_name": "ALDI France Raches (Cuincy)",
+      "old_client_region": "Cuincy",
+      "new_client_region": "Cuincy",
+      "old_client_id": 2,
+      "new_client_id": 2,
+      "timestamp": "2025-11-28T16:14:24.971247+00:00"
+    },
+    {
+      "vcom_system_key": "J3CSD",
+      "old_name": "ALDI France Riorges (Cuincy)",
+      "new_name": "ALDI France Riorges (Saint Oblas)",
+      "old_client_region": "Cuincy",
+      "new_client_region": "Saint Oblas",
+      "old_client_id": 16,
+      "new_client_id": 16,
+      "timestamp": "2025-11-28T16:14:25.020004+00:00"
+    },
+    {
+      "vcom_system_key": "3WLUH",
+      "old_name": "01 Thiriet saint Maur (SIFL Thiriet)",
+      "new_name": "Thiriet saint Maur (SIFL Thiriet)",
+      "old_client_region": "SIFL Thiriet",
+      "new_client_region": "SIFL Thiriet",
+      "old_client_id": 650,
+      "new_client_id": null,
+      "timestamp": "2025-11-28T16:14:25.068249+00:00"
+    }
+  ],
+  "client_warnings": [
+    {
+      "site_key": "3WLUH",
+      "region": "SIFL Thiriet",
+      "context": "name_change"
+    }
+  ]
+}
