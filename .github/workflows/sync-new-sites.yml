@@ -1,0 +1,59 @@
+name: Sync New Sites Daily
+
+on:
+  # Déclenchement quotidien à 5h UTC (7h Paris en hiver, 6h en été)
+  schedule:
+    - cron: '0 5 * * *'
+  
+  # Déclenchement manuel via l'interface GitHub
+  workflow_dispatch:
+
+jobs:
+  sync-new-sites:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        run: |
+          pip install poetry
+          poetry config virtualenvs.create false
+
+      - name: Install dependencies
+        run: poetry install
+
+      - name: Run sync new sites
+        env:
+          VCOM_API_KEY: ${{ secrets.VCOM_API_KEY }}
+          VCOM_USERNAME: ${{ secrets.VCOM_USERNAME }}
+          VCOM_PASSWORD: ${{ secrets.VCOM_PASSWORD }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          LOG_LEVEL: INFO
+        run: |
+          poetry run python -m vysync.sync_new_sites
+
+      - name: Upload report artifact
+        if: always()  # Upload même si le workflow échoue
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-new-sites-report-${{ github.run_number }}
+          path: sync_new_sites_*.json
+          retention-days: 30
+
+      - name: Upload debug logs
+        if: failure()  # Upload seulement en cas d'échec
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-logs-${{ github.run_number }}
+          path: |
+            debug_*.log
+            updates_*.log
+          retention-days: 7
