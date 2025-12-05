@@ -2,7 +2,7 @@ name: Sync PPC data weekly
 
 on:
   schedule:
-    - cron: '0 16 * * 6'   # Tous les samedis à 16h UTC (18h Paris hiver, 17h été)
+    - cron: '0 12 * * 6'   # Tous les samedis à 16h UTC (18h Paris hiver, 17h été)
   workflow_dispatch:       # Permet de lancer manuellement depuis GitHub
 
 jobs:
