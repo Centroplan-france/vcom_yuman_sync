@@ -209,6 +209,16 @@ def run_diagnostic(site_key: str | None = None) -> Dict[str, Any]:
         "phase3_diff": {},
         "phase4_details": {},
         "errors": [],
+        # BUG 3 FIX: Detailed logs
+        "details": {
+            "sites_created": [],
+            "sites_updated": [],
+            "sites_deleted": [],
+            "equipments_created": [],
+            "equipments_updated": [],
+            "equipments_deleted": [],
+            "ignored_sites": [],
+        },
     }
     
     # ═══════════════════════════════════════════════════════════════════════════
@@ -236,49 +246,72 @@ def run_diagnostic(site_key: str | None = None) -> Dict[str, Any]:
     # PHASE 1 : LECTURE SUPABASE
     # ═══════════════════════════════════════════════════════════════════════════
     print_header("PHASE 1 : LECTURE SUPABASE (source de vérité)")
-    
+
     # Variable pour stocker les yuman_site_ids à filtrer (pour Phase 2)
     target_yuman_site_ids: set = set()
     target_supabase_site_ids: set = set()
-    
+    # BUG 1 & 2 FIX: Track ignored sites to exclude them from both sides
+    ignored_yuman_site_ids: set = set()
+    ignored_supabase_site_ids: set = set()
+
     try:
         print("Chargement des sites depuis Supabase...")
         sb_sites_all = sb.fetch_sites_y()  # Indexé par yuman_site_id
-        
-        # Filtrer les sites ignorés
+
+        # BUG 1 FIX: Collect ignored site IDs BEFORE filtering
+        for yuman_site_id, site in sb_sites_all.items():
+            if getattr(site, "ignore_site", False):
+                ignored_yuman_site_ids.add(yuman_site_id)
+                if site.id:
+                    ignored_supabase_site_ids.add(site.id)
+                # Log ignored sites for report
+                report["details"]["ignored_sites"].append({
+                    "yuman_site_id": yuman_site_id,
+                    "site_id": site.id,
+                    "name": site.name,
+                    "vcom_system_key": site.vcom_system_key,
+                })
+
+        if ignored_yuman_site_ids:
+            print(f"  {C.YELLOW}⚠ {len(ignored_yuman_site_ids)} sites ignorés (ignore_site=true){C.END}")
+            for info in report["details"]["ignored_sites"]:
+                print(f"    • {info['name']} (yuman_id={info['yuman_site_id']}, site_id={info['site_id']})")
+
+        # Now filter out ignored sites for the diff
         sb_sites = {
             k: s for k, s in sb_sites_all.items()
             if not getattr(s, "ignore_site", False)
         }
-        
+
         # Filtrer par site_key si spécifié
         if site_key:
             sb_sites = {k: s for k, s in sb_sites.items() if s.vcom_system_key == site_key}
-        
+
         # Collecter les yuman_site_id et site_id pour filtrer Yuman ensuite
         for yuman_site_id, site in sb_sites.items():
             target_yuman_site_ids.add(yuman_site_id)
             if site.id:
                 target_supabase_site_ids.add(site.id)
-        
-        print(f"  {C.GREEN}✓ {len(sb_sites)} sites chargés{C.END}")
-        if len(sb_sites_all) != len(sb_sites):
-            ignored_count = len(sb_sites_all) - len(sb_sites)
-            print(f"    (ignorés/filtrés: {ignored_count})")
-        
+
+        print(f"  {C.GREEN}✓ {len(sb_sites)} sites chargés (actifs){C.END}")
+
         # Afficher les yuman_site_ids qu'on va chercher
         if site_key and target_yuman_site_ids:
             print(f"    yuman_site_ids à synchroniser: {target_yuman_site_ids}")
-        
+
         print("\nChargement des équipements depuis Supabase...")
         sb_equips_all = sb.fetch_equipments_y()
-        
+
+        # BUG 2 FIX: Filter out equipments from ignored sites
+        sb_equips = {
+            k: e for k, e in sb_equips_all.items()
+            if e.site_id not in ignored_supabase_site_ids
+        }
+
         # Filtrer par site_id Supabase
         if site_key:
-            sb_equips = {k: e for k, e in sb_equips_all.items() if e.site_id in target_supabase_site_ids}
-        else:
-            sb_equips = sb_equips_all
-        
+            sb_equips = {k: e for k, e in sb_equips.items() if e.site_id in target_supabase_site_ids}
+
         print(f"  {C.GREEN}✓ {len(sb_equips)} équipements chargés{C.END}")
         
         # Stats par catégorie
@@ -307,21 +340,26 @@ def run_diagnostic(site_key: str | None = None) -> Dict[str, Any]:
     # PHASE 2 : LECTURE YUMAN
     # ═══════════════════════════════════════════════════════════════════════════
     print_header("PHASE 2 : LECTURE YUMAN (état actuel)")
-    
+
     try:
         print("Chargement des sites depuis Yuman...")
         y_sites_all = y.fetch_sites()  # Indexé par yuman_site_id
-        
+
+        # BUG 1 FIX: Exclude ignored sites from Yuman side too
+        # This prevents them from appearing in DELETE
+        y_sites = {
+            k: s for k, s in y_sites_all.items()
+            if k not in ignored_yuman_site_ids
+        }
+
         # Filtrer par yuman_site_id (PAS par vcom_system_key car il peut être vide côté Yuman)
         if site_key:
             # On utilise les yuman_site_ids récupérés depuis Supabase
-            y_sites = {k: s for k, s in y_sites_all.items() if k in target_yuman_site_ids}
+            y_sites = {k: s for k, s in y_sites.items() if k in target_yuman_site_ids}
             print(f"    Filtrage par yuman_site_id: {target_yuman_site_ids}")
-        else:
-            y_sites = y_sites_all
-        
+
         print(f"  {C.GREEN}✓ {len(y_sites)} sites chargés{C.END}")
-        
+
         # Afficher l'état du vcom_system_key côté Yuman
         for yid, site in y_sites.items():
             vcom_key_yuman = site.vcom_system_key
@@ -329,16 +367,20 @@ def run_diagnostic(site_key: str | None = None) -> Dict[str, Any]:
                 print(f"    Site {yid}: vcom_system_key = {C.GREEN}{vcom_key_yuman}{C.END}")
             else:
                 print(f"    Site {yid}: vcom_system_key = {C.RED}NON RENSEIGNÉ{C.END} (à synchroniser)")
-        
+
         print("\nChargement des équipements depuis Yuman...")
         y_equips_all = y.fetch_equips()
-        
+
+        # BUG 2 FIX: Exclude equipments from ignored sites on Yuman side too
+        y_equips = {
+            k: e for k, e in y_equips_all.items()
+            if e.site_id not in ignored_supabase_site_ids
+        }
+
         # Filtrer par site_id Supabase (les équipements Yuman ont le site_id Supabase via le mapping)
         if site_key:
-            y_equips = {k: e for k, e in y_equips_all.items() if e.site_id in target_supabase_site_ids}
-        else:
-            y_equips = y_equips_all
-        
+            y_equips = {k: e for k, e in y_equips.items() if e.site_id in target_supabase_site_ids}
+
         print(f"  {C.GREEN}✓ {len(y_equips)} équipements chargés{C.END}")
         
         # Stats par catégorie
@@ -407,7 +449,77 @@ def run_diagnostic(site_key: str | None = None) -> Dict[str, Any]:
                 "delete": len(patch_equips.delete),
             },
         }
-        
+
+        # BUG 3 FIX: Add detailed logs to report
+        # Sites created
+        for site in patch_sites.add:
+            report["details"]["sites_created"].append({
+                "name": site.name,
+                "vcom_system_key": site.vcom_system_key,
+                "yuman_site_id": site.yuman_site_id,
+                "address": site.address,
+            })
+
+        # Sites updated with field changes
+        site_fields = ['name', 'address', 'latitude', 'longitude', 'nominal_power', 'commission_date']
+        for old, new in patch_sites.update:
+            changes = {}
+            for field in site_fields:
+                old_val = getattr(old, field, None)
+                new_val = getattr(new, field, None)
+                if old_val != new_val:
+                    changes[field] = {"old": old_val, "new": new_val}
+            report["details"]["sites_updated"].append({
+                "name": new.name,
+                "vcom_system_key": new.vcom_system_key,
+                "yuman_site_id": new.yuman_site_id,
+                "changes": changes,
+            })
+
+        # Sites deleted
+        for site in patch_sites.delete:
+            report["details"]["sites_deleted"].append({
+                "name": site.name,
+                "vcom_system_key": site.vcom_system_key,
+                "yuman_site_id": site.yuman_site_id,
+            })
+
+        # Equipments created
+        for eq in patch_equips.add:
+            report["details"]["equipments_created"].append({
+                "name": eq.name,
+                "serial_number": eq.serial_number,
+                "category": CAT_NAMES.get(eq.category_id, f"CAT_{eq.category_id}"),
+                "site_id": eq.site_id,
+                "vcom_device_id": eq.vcom_device_id,
+            })
+
+        # Equipments updated with field changes
+        equip_fields = ['name', 'brand', 'model', 'count', 'serial_number']
+        for old, new in patch_equips.update:
+            changes = {}
+            for field in equip_fields:
+                old_val = getattr(old, field, None)
+                new_val = getattr(new, field, None)
+                if old_val != new_val:
+                    changes[field] = {"old": old_val, "new": new_val}
+            report["details"]["equipments_updated"].append({
+                "name": new.name,
+                "serial_number": new.serial_number,
+                "category": CAT_NAMES.get(new.category_id, f"CAT_{new.category_id}"),
+                "yuman_material_id": new.yuman_material_id,
+                "changes": changes,
+            })
+
+        # Equipments deleted
+        for eq in patch_equips.delete:
+            report["details"]["equipments_deleted"].append({
+                "name": eq.name,
+                "serial_number": eq.serial_number,
+                "category": CAT_NAMES.get(eq.category_id, f"CAT_{eq.category_id}"),
+                "yuman_material_id": eq.yuman_material_id,
+            })
+
     except Exception as e:
         print(f"  {C.RED}✗ Erreur Phase 3: {e}{C.END}")
         report["errors"].append({"phase": "phase3_diff", "error": str(e)})
