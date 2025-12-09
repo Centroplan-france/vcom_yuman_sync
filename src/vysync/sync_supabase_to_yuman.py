@@ -125,6 +125,16 @@ def sync_supabase_to_yuman(
         "equipments": {"before": 0, "add": 0, "update": 0, "delete": 0, "after": 0},
         "success": True,
         "errors": [],
+        # Detailed logs for JSON report (BUG 3 fix)
+        "details": {
+            "sites_created": [],
+            "sites_updated": [],
+            "sites_deleted": [],
+            "equipments_created": [],
+            "equipments_updated": [],
+            "equipments_deleted": [],
+            "ignored_sites": [],
+        },
     }
     
     # ═══════════════════════════════════════════════════════════════════════════
@@ -153,39 +163,67 @@ def sync_supabase_to_yuman(
     # PHASE 1 : LECTURE SUPABASE
     # ═══════════════════════════════════════════════════════════════════════════
     print_header("PHASE 1 : LECTURE SUPABASE")
-    
+
     target_yuman_site_ids: set = set()
     target_supabase_site_ids: set = set()
-    
+    # BUG 1 & 2 FIX: Track ignored sites to exclude them from both sides
+    ignored_yuman_site_ids: set = set()
+    ignored_supabase_site_ids: set = set()
+
     try:
-        # Sites
+        # Sites - Load ALL sites first (including ignored ones)
         sb_sites_all = sb.fetch_sites_y()
+
+        # BUG 1 FIX: Collect ignored site IDs BEFORE filtering
+        for yuman_site_id, site in sb_sites_all.items():
+            if getattr(site, "ignore_site", False):
+                ignored_yuman_site_ids.add(yuman_site_id)
+                if site.id:
+                    ignored_supabase_site_ids.add(site.id)
+                # Log ignored sites for report
+                report["details"]["ignored_sites"].append({
+                    "yuman_site_id": yuman_site_id,
+                    "site_id": site.id,
+                    "name": site.name,
+                    "vcom_system_key": site.vcom_system_key,
+                })
+
+        if ignored_yuman_site_ids:
+            logger.info("Sites ignorés (ignore_site=true): %d", len(ignored_yuman_site_ids))
+            print(f"  {C.YELLOW}⚠ {len(ignored_yuman_site_ids)} sites ignorés (ignore_site=true){C.END}")
+
+        # Now filter out ignored sites for the diff
         sb_sites = {
             k: s for k, s in sb_sites_all.items()
             if not getattr(s, "ignore_site", False)
         }
-        
+
         if site_key:
             sb_sites = {k: s for k, s in sb_sites.items() if s.vcom_system_key == site_key}
-        
+
         for yuman_site_id, site in sb_sites.items():
             target_yuman_site_ids.add(yuman_site_id)
             if site.id:
                 target_supabase_site_ids.add(site.id)
-        
+
         logger.info("Supabase: %d sites chargés", len(sb_sites))
         print(f"  {C.GREEN}✓ {len(sb_sites)} sites{C.END}")
-        
-        # Équipements
+
+        # Équipements - Load all, then filter
         sb_equips_all = sb.fetch_equipments_y()
+
+        # BUG 2 FIX: Filter out equipments from ignored sites
+        sb_equips = {
+            k: e for k, e in sb_equips_all.items()
+            if e.site_id not in ignored_supabase_site_ids
+        }
+
         if site_key:
-            sb_equips = {k: e for k, e in sb_equips_all.items() if e.site_id in target_supabase_site_ids}
-        else:
-            sb_equips = sb_equips_all
-        
+            sb_equips = {k: e for k, e in sb_equips.items() if e.site_id in target_supabase_site_ids}
+
         logger.info("Supabase: %d équipements chargés", len(sb_equips))
         print(f"  {C.GREEN}✓ {len(sb_equips)} équipements{C.END}")
-        
+
         report["sites"]["before"] = len(sb_sites)
         report["equipments"]["before"] = len(sb_equips)
         
@@ -199,25 +237,36 @@ def sync_supabase_to_yuman(
     # PHASE 2 : LECTURE YUMAN
     # ═══════════════════════════════════════════════════════════════════════════
     print_header("PHASE 2 : LECTURE YUMAN")
-    
+
     try:
         # Sites
         y_sites_all = y.fetch_sites()
+
+        # BUG 1 FIX: Exclude ignored sites from Yuman side too
+        # This prevents them from appearing in DELETE
+        y_sites = {
+            k: s for k, s in y_sites_all.items()
+            if k not in ignored_yuman_site_ids
+        }
+
         if site_key:
-            y_sites = {k: s for k, s in y_sites_all.items() if k in target_yuman_site_ids}
-        else:
-            y_sites = y_sites_all
-        
+            y_sites = {k: s for k, s in y_sites.items() if k in target_yuman_site_ids}
+
         logger.info("Yuman: %d sites chargés", len(y_sites))
         print(f"  {C.GREEN}✓ {len(y_sites)} sites{C.END}")
-        
+
         # Équipements
         y_equips_all = y.fetch_equips()
+
+        # BUG 2 FIX: Exclude equipments from ignored sites on Yuman side too
+        y_equips = {
+            k: e for k, e in y_equips_all.items()
+            if e.site_id not in ignored_supabase_site_ids
+        }
+
         if site_key:
-            y_equips = {k: e for k, e in y_equips_all.items() if e.site_id in target_supabase_site_ids}
-        else:
-            y_equips = y_equips_all
-        
+            y_equips = {k: e for k, e in y_equips.items() if e.site_id in target_supabase_site_ids}
+
         logger.info("Yuman: %d équipements chargés", len(y_equips))
         print(f"  {C.GREEN}✓ {len(y_equips)} équipements{C.END}")
         
@@ -273,7 +322,77 @@ def sync_supabase_to_yuman(
         report["equipments"]["add"] = len(patch_equips.add)
         report["equipments"]["update"] = len(patch_equips.update)
         report["equipments"]["delete"] = len(patch_equips.delete)
-        
+
+        # BUG 3 FIX: Add detailed logs to report
+        # Sites created
+        for site in patch_sites.add:
+            report["details"]["sites_created"].append({
+                "name": site.name,
+                "vcom_system_key": site.vcom_system_key,
+                "yuman_site_id": site.yuman_site_id,
+                "address": site.address,
+            })
+
+        # Sites updated with field changes
+        site_fields = ['name', 'address', 'latitude', 'longitude', 'nominal_power', 'commission_date']
+        for old, new in patch_sites.update:
+            changes = {}
+            for field in site_fields:
+                old_val = getattr(old, field, None)
+                new_val = getattr(new, field, None)
+                if old_val != new_val:
+                    changes[field] = {"old": old_val, "new": new_val}
+            report["details"]["sites_updated"].append({
+                "name": new.name,
+                "vcom_system_key": new.vcom_system_key,
+                "yuman_site_id": new.yuman_site_id,
+                "changes": changes,
+            })
+
+        # Sites deleted
+        for site in patch_sites.delete:
+            report["details"]["sites_deleted"].append({
+                "name": site.name,
+                "vcom_system_key": site.vcom_system_key,
+                "yuman_site_id": site.yuman_site_id,
+            })
+
+        # Equipments created
+        for eq in patch_equips.add:
+            report["details"]["equipments_created"].append({
+                "name": eq.name,
+                "serial_number": eq.serial_number,
+                "category": CAT_NAMES.get(eq.category_id, f"CAT_{eq.category_id}"),
+                "site_id": eq.site_id,
+                "vcom_device_id": eq.vcom_device_id,
+            })
+
+        # Equipments updated with field changes
+        equip_fields = ['name', 'brand', 'model', 'count', 'serial_number']
+        for old, new in patch_equips.update:
+            changes = {}
+            for field in equip_fields:
+                old_val = getattr(old, field, None)
+                new_val = getattr(new, field, None)
+                if old_val != new_val:
+                    changes[field] = {"old": old_val, "new": new_val}
+            report["details"]["equipments_updated"].append({
+                "name": new.name,
+                "serial_number": new.serial_number,
+                "category": CAT_NAMES.get(new.category_id, f"CAT_{new.category_id}"),
+                "yuman_material_id": new.yuman_material_id,
+                "changes": changes,
+            })
+
+        # Equipments deleted
+        for eq in patch_equips.delete:
+            report["details"]["equipments_deleted"].append({
+                "name": eq.name,
+                "serial_number": eq.serial_number,
+                "category": CAT_NAMES.get(eq.category_id, f"CAT_{eq.category_id}"),
+                "yuman_material_id": eq.yuman_material_id,
+            })
+
     except Exception as e:
         logger.error("Erreur Phase 3: %s", e)
         report["errors"].append({"phase": "phase3", "error": str(e)})
