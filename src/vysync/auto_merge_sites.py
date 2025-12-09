@@ -374,7 +374,7 @@ def send_alert_email(unmatched_vcom: List[SiteInfo],
     # Envoyer
     try:
         msg = MIMEMultipart()
-        msg["From"] = smtp_user
+        msg["From"] = "onboarding@resend.dev"
         msg["To"] = ALERT_EMAIL
         msg["Subject"] = subject
         msg.attach(MIMEText(body, "plain", "utf-8"))
