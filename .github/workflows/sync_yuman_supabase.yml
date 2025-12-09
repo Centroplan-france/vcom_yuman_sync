@@ -1,0 +1,151 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Workflow: Sync Yuman → Supabase
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Ce workflow synchronise les données Yuman vers Supabase :
+# - Clients (Yuman = source de vérité)
+# - Sites (fill if NULL + détection conflits client_map_id)
+# - Équipements (yuman_material_id + SIM brand/model)
+#
+# Planification : Tous les jours à 6h UTC (7h Paris hiver, 8h Paris été)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: Sync Yuman to Supabase
+
+on:
+  # Exécution planifiée quotidienne
+  schedule:
+    - cron: '0 6 * * *'  # 6h UTC = 7h Paris (hiver) / 8h Paris (été)
+  
+  # Exécution manuelle possible
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Activer les logs DEBUG'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  sync:
+    name: Sync Yuman → Supabase
+    runs-on: ubuntu-latest
+    
+    steps:
+      # ─────────────────────────────────────────────────────────────
+      # 1. Checkout du code
+      # ─────────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ─────────────────────────────────────────────────────────────
+      # 2. Setup Python
+      # ─────────────────────────────────────────────────────────────
+      - name: Setup Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # ─────────────────────────────────────────────────────────────
+      # 3. Cache des dépendances Poetry
+      # ─────────────────────────────────────────────────────────────
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pypoetry
+            ~/.local/share/pypoetry
+            .venv
+          key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-
+
+      # ─────────────────────────────────────────────────────────────
+      # 4. Installation de Poetry et des dépendances
+      # ─────────────────────────────────────────────────────────────
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: |
+          poetry config virtualenvs.in-project true
+          poetry install --no-interaction
+
+      # ─────────────────────────────────────────────────────────────
+      # 5. Exécution du script de synchronisation
+      # ─────────────────────────────────────────────────────────────
+      - name: Run Yuman → Supabase sync
+        env:
+          # Credentials Supabase
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          
+          # Credentials Yuman
+          YUMAN_TOKEN: ${{ secrets.YUMAN_TOKEN }}
+          
+          # Niveau de log
+          LOG_LEVEL: ${{ inputs.debug == 'true' && 'DEBUG' || 'INFO' }}
+        run: |
+          poetry run python -m vysync.sync_yuman_to_supabase
+
+      # ─────────────────────────────────────────────────────────────
+      # 6. Upload du rapport JSON comme artifact
+      # ─────────────────────────────────────────────────────────────
+      - name: Upload sync report
+        uses: actions/upload-artifact@v4
+        if: always()  # Upload même en cas d'échec
+        with:
+          name: sync-yuman-supabase-report-${{ github.run_id }}
+          path: sync_yuman_supabase_*.json
+          retention-days: 30
+
+      # ─────────────────────────────────────────────────────────────
+      # 7. Affichage du résumé dans les logs GitHub
+      # ─────────────────────────────────────────────────────────────
+      - name: Display sync summary
+        if: always()
+        run: |
+          echo "══════════════════════════════════════════════════════════"
+          echo "SYNC YUMAN → SUPABASE - RÉSUMÉ"
+          echo "══════════════════════════════════════════════════════════"
+          if ls sync_yuman_supabase_*.json 1> /dev/null 2>&1; then
+            cat sync_yuman_supabase_*.json | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          print(f\"Exécution: {data.get('execution_date', 'N/A')}\")
+          print()
+          print('CLIENTS:')
+          c = data.get('clients', {})
+          print(f\"  Yuman: {c.get('yuman_count', 0)} | DB: {c.get('db_count', 0)}\")
+          print(f\"  +{c.get('added', 0)} ajoutés, ~{c.get('updated', 0)} modifiés\")
+          print()
+          print('SITES:')
+          s = data.get('sites', {})
+          print(f\"  Yuman: {s.get('yuman_count', 0)} | DB: {s.get('db_count', 0)}\")
+          print(f\"  +{s.get('added', 0)} ajoutés, ~{s.get('updated', 0)} modifiés\")
+          conflicts = s.get('conflicts', [])
+          if conflicts:
+              print(f\"  ⚠️  {len(conflicts)} CONFLIT(S) client_map_id détecté(s)!\")
+          print()
+          print('ÉQUIPEMENTS:')
+          e = data.get('equipments', {})
+          print(f\"  Yuman: {e.get('yuman_count', 0)} | DB: {e.get('db_count', 0)}\")
+          print(f\"  yuman_material_id: {e.get('updates_yuman_material_id', 0)} mises à jour\")
+          print(f\"  SIM (brand/model): {e.get('updates_sim', 0)} mises à jour\")
+          print()
+          if data.get('errors'):
+              print('❌ ERREURS:')
+              for err in data['errors']:
+                  print(f\"  - {err['step']}: {err['error']}\")
+          else:
+              print('✅ Synchronisation terminée sans erreur')
+          "
+          else
+            echo "⚠️ Aucun rapport JSON trouvé"
+          fi
+          echo "══════════════════════════════════════════════════════════"
