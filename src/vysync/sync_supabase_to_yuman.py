@@ -283,10 +283,11 @@ def sync_supabase_to_yuman(
     
     try:
         # Diff sites
+        # ignore_fields: latitude/longitude ne peuvent pas être mis à jour via l'API Yuman
         patch_sites = diff_entities(
             y_sites,
             sb_sites,
-            ignore_fields={"client_map_id", "id", "ignore_site"}
+            ignore_fields={"client_map_id", "id", "ignore_site", "latitude", "longitude"}
         )
         
         logger.info("Diff sites: +%d ~%d -%d", 
@@ -302,12 +303,18 @@ def sync_supabase_to_yuman(
             if e.yuman_material_id
         }
         set_parent_map(id_by_vcom)
-        
+
+        # RÈGLE MÉTIER : Exclure les équipements SIM du diff
+        # Yuman est la source de vérité pour les cartes SIM
+        sb_equips_no_sim = {k: e for k, e in sb_equips.items() if e.category_id != CAT_SIM}
+        y_equips_no_sim = {k: e for k, e in y_equips.items() if e.category_id != CAT_SIM}
+
         # Diff équipements
+        # ignore_fields: name et parent_id ne peuvent pas être modifiés via l'API Yuman
         patch_equips = diff_entities(
-            y_equips,
-            sb_equips,
-            ignore_fields={"vcom_system_key", "parent_id"}
+            y_equips_no_sim,
+            sb_equips_no_sim,
+            ignore_fields={"vcom_system_key", "parent_id", "name"}
         )
         
         logger.info("Diff équipements: +%d ~%d -%d",
@@ -524,11 +531,16 @@ def sync_supabase_to_yuman(
         # Nouveau diff pour vérifier
         patch_sites_after = diff_entities(
             y_sites_after, sb_sites,
-            ignore_fields={"client_map_id", "id", "ignore_site"}
+            ignore_fields={"client_map_id", "id", "ignore_site", "latitude", "longitude"}
         )
+
+        # Exclure les SIM pour la vérification aussi
+        sb_equips_no_sim_after = {k: e for k, e in sb_equips.items() if e.category_id != CAT_SIM}
+        y_equips_no_sim_after = {k: e for k, e in y_equips_after.items() if e.category_id != CAT_SIM}
+
         patch_equips_after = diff_entities(
-            y_equips_after, sb_equips,
-            ignore_fields={"vcom_system_key", "parent_id"}
+            y_equips_no_sim_after, sb_equips_no_sim_after,
+            ignore_fields={"vcom_system_key", "parent_id", "name"}
         )
         
         remaining = (
