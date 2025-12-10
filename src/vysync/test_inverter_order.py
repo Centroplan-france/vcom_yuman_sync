@@ -6,7 +6,8 @@ Objectif : Voir EXACTEMENT ce que retourne chaque endpoint pour comprendre
 d'où viennent les différences de modèle
 
 Usage:
-    poetry run python test_inverter_api_raw.py
+    poetry run python -m vysync.test_inverter_order
+
 """
 
 import json
@@ -34,9 +35,9 @@ class C:
 
 # Prendre juste quelques onduleurs pour analyse détaillée
 SAMPLE_SERIALS = [
-    "O1V18A01213W1",  # Delta RPI M30A -> M50A
-    "27060319",       # Fronius SYMO
-    "121703",         # ABB/Power-One
+    "A2360914584",  # SG40CX-P2
+    "A2360914586",       # SG40CX-P2    Id2165562.2
+    "A2362100836",         # SG50CX-P2   Id2165562.3
 ]
 
 
