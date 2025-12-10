@@ -411,11 +411,12 @@ def run_diagnostic(site_key: str | None = None) -> Dict[str, Any]:
     
     try:
         # DIFF SITES
+        # ignore_fields: latitude/longitude ne peuvent pas être mis à jour via l'API Yuman
         print("Calcul diff sites (Yuman vs Supabase)...")
         patch_sites = diff_entities(
             y_sites,      # current (Yuman)
             sb_sites,     # target (Supabase = vérité)
-            ignore_fields={"client_map_id", "id", "ignore_site"}
+            ignore_fields={"client_map_id", "id", "ignore_site", "latitude", "longitude"}
         )
         print_patch_summary(patch_sites, "Sites")
         
@@ -428,12 +429,20 @@ def run_diagnostic(site_key: str | None = None) -> Dict[str, Any]:
         }
         set_parent_map(id_by_vcom)
         print(f"  {C.GREEN}✓ {len(id_by_vcom)} mappings parent configurés{C.END}")
-        
+
+        # RÈGLE MÉTIER : Exclure les équipements SIM du diff
+        # Yuman est la source de vérité pour les cartes SIM
+        sb_equips_no_sim = {k: e for k, e in sb_equips.items() if e.category_id != CAT_SIM}
+        y_equips_no_sim = {k: e for k, e in y_equips.items() if e.category_id != CAT_SIM}
+        print(f"  {C.YELLOW}⚠ {len(sb_equips) - len(sb_equips_no_sim)} équipements SIM exclus du diff (Yuman = source de vérité){C.END}")
+
+        # Diff équipements
+        # ignore_fields: name et parent_id ne peuvent pas être modifiés via l'API Yuman
         print("\nCalcul diff équipements (Yuman vs Supabase)...")
         patch_equips = diff_entities(
-            y_equips,     # current (Yuman)
-            sb_equips,    # target (Supabase = vérité)
-            ignore_fields={"vcom_system_key", "parent_id"}
+            y_equips_no_sim,     # current (Yuman)
+            sb_equips_no_sim,    # target (Supabase = vérité)
+            ignore_fields={"vcom_system_key", "parent_id", "name"}
         )
         print_patch_summary(patch_equips, "Équipements")
         
