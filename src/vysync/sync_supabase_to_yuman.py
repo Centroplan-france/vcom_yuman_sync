@@ -31,6 +31,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 from collections import defaultdict
 from dataclasses import asdict
@@ -52,6 +53,17 @@ from vysync.models import (
     Site, Equipment,
     CAT_MODULE, CAT_INVERTER, CAT_STRING, CAT_SIM, CAT_CENTRALE
 )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# UTILITAIRES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def normalize_site_name(name: str) -> str:
+    """Normalise un nom de site en enlevant le préfixe numérique, 'France' et le suffixe entre parenthèses."""
+    if not name:
+        return ""
+    return re.sub(r'^\d+\s+|\s*\(.*?\)| France', '', name).strip()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -280,8 +292,13 @@ def sync_supabase_to_yuman(
     # PHASE 3 : CALCUL DU DIFF
     # ═══════════════════════════════════════════════════════════════════════════
     print_header("PHASE 3 : CALCUL DU DIFF")
-    
+
     try:
+        # Normaliser les noms des sites Supabase pour éviter les faux positifs
+        # Le nom dans Yuman est déjà normalisé (sans "01", "France", "(Cestas)")
+        for site in sb_sites.values():
+            site.name = normalize_site_name(site.name)
+
         # Diff sites
         # ignore_fields: latitude/longitude ne peuvent pas être mis à jour via l'API Yuman
         patch_sites = diff_entities(
@@ -516,48 +533,62 @@ def sync_supabase_to_yuman(
     # PHASE 5 : VÉRIFICATION
     # ═══════════════════════════════════════════════════════════════════════════
     print_header("PHASE 5 : VÉRIFICATION")
-    
+
     try:
         print("Re-lecture Yuman après application...")
-        
+
         # Re-fetch Yuman
-        y_sites_after = y.fetch_sites()
-        y_equips_after = y.fetch_equips()
-        
+        y_sites_after_all = y.fetch_sites()
+        y_equips_after_all = y.fetch_equips()
+
+        # APPLIQUER LES MÊMES FILTRES QUE PHASES 1-2 :
+        # 1. Exclure les sites ignorés
+        y_sites_after = {
+            k: s for k, s in y_sites_after_all.items()
+            if k not in ignored_yuman_site_ids
+        }
+
+        # 2. Exclure les équipements des sites ignorés
+        y_equips_after = {
+            k: e for k, e in y_equips_after_all.items()
+            if e.site_id not in ignored_supabase_site_ids
+        }
+
+        # 3. Filtrer par site_key si spécifié
         if site_key:
             y_sites_after = {k: s for k, s in y_sites_after.items() if k in target_yuman_site_ids}
             y_equips_after = {k: e for k, e in y_equips_after.items() if e.site_id in target_supabase_site_ids}
-        
-        # Nouveau diff pour vérifier
+
+        # Nouveau diff pour vérifier (sites)
         patch_sites_after = diff_entities(
             y_sites_after, sb_sites,
             ignore_fields={"client_map_id", "id", "ignore_site", "latitude", "longitude"}
         )
 
-        # Exclure les SIM pour la vérification aussi
-        sb_equips_no_sim_after = {k: e for k, e in sb_equips.items() if e.category_id != CAT_SIM}
-        y_equips_no_sim_after = {k: e for k, e in y_equips_after.items() if e.category_id != CAT_SIM}
+        # 4. Exclure les SIM pour la vérification
+        sb_equips_no_sim_verif = {k: e for k, e in sb_equips.items() if e.category_id != CAT_SIM}
+        y_equips_no_sim_verif = {k: e for k, e in y_equips_after.items() if e.category_id != CAT_SIM}
 
         patch_equips_after = diff_entities(
-            y_equips_no_sim_after, sb_equips_no_sim_after,
+            y_equips_no_sim_verif, sb_equips_no_sim_verif,
             ignore_fields={"vcom_system_key", "parent_id", "name"}
         )
-        
+
         remaining = (
             len(patch_sites_after.add) + len(patch_sites_after.update) + len(patch_sites_after.delete) +
             len(patch_equips_after.add) + len(patch_equips_after.update) + len(patch_equips_after.delete)
         )
-        
+
         report["sites"]["after"] = len(y_sites_after)
         report["equipments"]["after"] = len(y_equips_after)
-        
+
         if remaining == 0:
             print(f"\n{C.GREEN}✓✓✓ SUCCÈS : Supabase et Yuman sont parfaitement synchronisés !{C.END}")
         else:
             print(f"\n{C.YELLOW}⚠️  {remaining} différence(s) restante(s) après application{C.END}")
             print(f"    Sites: +{len(patch_sites_after.add)} ~{len(patch_sites_after.update)} -{len(patch_sites_after.delete)}")
             print(f"    Équipements: +{len(patch_equips_after.add)} ~{len(patch_equips_after.update)} -{len(patch_equips_after.delete)}")
-        
+
     except Exception as e:
         logger.error("Erreur vérification: %s", e)
         print(f"  {C.YELLOW}⚠️  Vérification échouée: {e}{C.END}")
@@ -574,7 +605,16 @@ def sync_supabase_to_yuman(
         print(f"{C.RED}✗ Synchronisation terminée avec des erreurs{C.END}")
         for err in report["errors"]:
             print(f"  • {err['phase']}: {err['error']}")
-    
+
+    # Auto-génération du rapport JSON
+    os.makedirs("logs", exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    auto_json_path = f"logs/sync_sb_to_yuman_{timestamp}.json"
+    with open(auto_json_path, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, ensure_ascii=False, default=str)
+    logger.info("Rapport JSON auto-généré: %s", auto_json_path)
+    print(f"\n📄 Rapport JSON: {auto_json_path}")
+
     return report
 
 
