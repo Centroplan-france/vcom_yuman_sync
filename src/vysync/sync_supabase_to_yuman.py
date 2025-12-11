@@ -26,6 +26,7 @@ Usage:
 """
 
 from __future__ import annotations
+from dataclasses import replace
 
 import argparse
 import json
@@ -296,8 +297,11 @@ def sync_supabase_to_yuman(
     try:
         # Normaliser les noms des sites Supabase pour éviter les faux positifs
         # Le nom dans Yuman est déjà normalisé (sans "01", "France", "(Cestas)")
-        for site in sb_sites.values():
-            site.name = normalize_site_name(site.name)
+        # Note: Site est un frozen dataclass, on doit créer des copies
+        sb_sites = {
+            k: replace(s, name=normalize_site_name(s.name))
+            for k, s in sb_sites.items()
+        }
 
         # Diff sites
         # ignore_fields: latitude/longitude ne peuvent pas être mis à jour via l'API Yuman
