@@ -29,47 +29,19 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      # ─────────────────────────────────────────────────────────────
-      # 1. Checkout du code
-      # ─────────────────────────────────────────────────────────────
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      # ─────────────────────────────────────────────────────────────
-      # 2. Setup Python
-      # ─────────────────────────────────────────────────────────────
-      - name: Setup Python ${{ env.PYTHON_VERSION }}
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      # ─────────────────────────────────────────────────────────────
-      # 3. Cache des dépendances Poetry
-      # ─────────────────────────────────────────────────────────────
-      - name: Cache Poetry dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/pypoetry
-            ~/.local/share/pypoetry
-            .venv
-          key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-poetry-
-
-      # ─────────────────────────────────────────────────────────────
-      # 4. Installation de Poetry et des dépendances
-      # ─────────────────────────────────────────────────────────────
-      - name: Install Poetry
-        run: |
-          curl -sSL https://install.python-poetry.org | python3 -
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
-          poetry config virtualenvs.in-project true
-          poetry install --no-interaction
-
+          pip install poetry
+          poetry config virtualenvs.create false
+          poetry install
       # ─────────────────────────────────────────────────────────────
       # 5. Exécution du script de synchronisation
       # ─────────────────────────────────────────────────────────────
