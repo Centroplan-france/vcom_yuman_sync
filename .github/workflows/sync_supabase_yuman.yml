@@ -43,7 +43,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          YUMAN_API_KEY: ${{ secrets.YUMAN_API_KEY }}
+          YUMAN_TOKEN: ${{ secrets.YUMAN_API_KEY }}
           LOG_LEVEL: INFO
         run: |
           # Construire les arguments
