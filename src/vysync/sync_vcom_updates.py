@@ -13,7 +13,7 @@ import json
 import logging
 from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Set
 
 from vysync.adapters.supabase_adapter import SupabaseAdapter
 from vysync.adapters.vcom_adapter import fetch_snapshot
@@ -25,17 +25,22 @@ from vysync.vcom_client import VCOMAPIClient
 logger = logging.getLogger(__name__)
 
 
-def format_changes_summary(patch: PatchSet, entity_type: str) -> Dict[str, Any]:
+def format_changes_summary(
+    patch: PatchSet, entity_type: str, ignore_fields: Optional[Set[str]] = None
+) -> Dict[str, Any]:
     """
     Formate un résumé des changements pour un type d'entité.
 
     Args:
         patch: PatchSet contenant add, update, delete
         entity_type: "sites" ou "equipments"
+        ignore_fields: Ensemble de champs à exclure du rapport (optionnel)
 
     Returns:
         Dictionnaire avec statistiques et détails des changements
     """
+    if ignore_fields is None:
+        ignore_fields = set()
     changes: Dict[str, Any] = {
         "entity_type": entity_type,
         "summary": {
@@ -64,23 +69,29 @@ def format_changes_summary(patch: PatchSet, entity_type: str) -> Dict[str, Any]:
         old_dict = asdict(old)
         new_dict = asdict(new)
 
-        # Détecter les champs qui ont changé
+        # Détecter les champs qui ont changé (en filtrant les champs ignorés)
         changed_fields = {}
         for key in old_dict.keys():
+            # Ignorer les champs spécifiés dans ignore_fields
+            if key in ignore_fields:
+                continue
+
             old_val = old_dict.get(key)
             new_val = new_dict.get(key)
             if old_val != new_val:
                 changed_fields[key] = {"old": old_val, "new": new_val}
 
-        changes["updated_items"].append(
-            {
-                "key": new.vcom_system_key
-                if hasattr(new, "vcom_system_key")
-                else new.serial_number,
-                "name": new.name if hasattr(new, "name") else None,
-                "changed_fields": changed_fields,
-            }
-        )
+        # N'ajouter l'item que si au moins un champ pertinent a changé
+        if changed_fields:
+            changes["updated_items"].append(
+                {
+                    "key": new.vcom_system_key
+                    if hasattr(new, "vcom_system_key")
+                    else new.serial_number,
+                    "name": new.name if hasattr(new, "name") else None,
+                    "changed_fields": changed_fields,
+                }
+            )
 
     # Détailler les suppressions
     for item in patch.delete:
@@ -294,8 +305,29 @@ def sync_vcom_to_supabase() -> dict:
                 "deleted": len(patch_equips.delete),
             },
         },
-        "sites_changes": format_changes_summary(patch_sites, "sites"),
-        "equipments_changes": format_changes_summary(patch_equips, "equipments"),
+        "sites_changes": format_changes_summary(
+            patch_sites,
+            "sites",
+            ignore_fields={
+                "yuman_site_id",  # Clé Yuman (pas dans VCOM)
+                "id",  # Clé interne Supabase
+                "ignore_site",  # Flag manuel
+                "client_map_id",  # Géré par sync_new_sites
+                "name",  # Géré par sync_new_sites
+                "code",  # Code Yuman (pas dans VCOM)
+                "aldi_id",  # ALDI ID (pas dans VCOM)
+                "aldi_store_id",  # ID magasin Aldi (pas dans VCOM)
+                "project_number_cp",  # Project number Centroplan (pas dans VCOM)
+            },
+        ),
+        "equipments_changes": format_changes_summary(
+            patch_equips,
+            "equipments",
+            ignore_fields={
+                "yuman_material_id",  # Clé Yuman (pas dans VCOM)
+                "parent_id",  # Contrainte FK complexe
+            },
+        ),
     }
 
     # Sauvegarder en JSON
