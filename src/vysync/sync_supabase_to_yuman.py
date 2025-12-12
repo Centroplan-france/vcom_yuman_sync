@@ -333,17 +333,20 @@ def sync_supabase_to_yuman(
         }
         set_parent_map(id_by_vcom)
 
-        # RÈGLE MÉTIER : Exclure les équipements SIM du diff
-        # Yuman est la source de vérité pour les cartes SIM
-        sb_equips_no_sim = {k: e for k, e in sb_equips.items() if e.category_id != CAT_SIM}
-        y_equips_no_sim = {k: e for k, e in y_equips.items() if e.category_id != CAT_SIM}
-
-        # Diff équipements
+        # Diff équipements (inclut les SIM pour permettre leur création)
         # ignore_fields: name et parent_id ne peuvent pas être modifiés via l'API Yuman
-        patch_equips = diff_entities(
-            y_equips_no_sim,
-            sb_equips_no_sim,
+        patch_equips_raw = diff_entities(
+            y_equips,
+            sb_equips,
             ignore_fields={"vcom_system_key", "parent_id", "name"}
+        )
+
+        # RÈGLE MÉTIER : Pour les SIM, Yuman est source de vérité
+        # → On permet la CRÉATION de SIM, mais pas la mise à jour ni la suppression
+        patch_equips = PatchSet(
+            add=patch_equips_raw.add,  # Garder toutes les créations (y compris SIM)
+            update=[(old, new) for old, new in patch_equips_raw.update if new.category_id != CAT_SIM],
+            delete=[e for e in patch_equips_raw.delete if e.category_id != CAT_SIM],
         )
         
         logger.info("Diff équipements: +%d ~%d -%d",
@@ -577,13 +580,17 @@ def sync_supabase_to_yuman(
             ignore_fields={"client_map_id", "id", "ignore_site", "latitude", "longitude"}
         )
 
-        # 4. Exclure les SIM pour la vérification
-        sb_equips_no_sim_verif = {k: e for k, e in sb_equips.items() if e.category_id != CAT_SIM}
-        y_equips_no_sim_verif = {k: e for k, e in y_equips_after.items() if e.category_id != CAT_SIM}
-
-        patch_equips_after = diff_entities(
-            y_equips_no_sim_verif, sb_equips_no_sim_verif,
+        # 4. Diff équipements pour vérification
+        patch_equips_after_raw = diff_entities(
+            y_equips_after, sb_equips,
             ignore_fields={"vcom_system_key", "parent_id", "name"}
+        )
+
+        # Appliquer la même règle SIM : ignorer UPDATE et DELETE pour les SIM
+        patch_equips_after = PatchSet(
+            add=patch_equips_after_raw.add,
+            update=[(old, new) for old, new in patch_equips_after_raw.update if new.category_id != CAT_SIM],
+            delete=[e for e in patch_equips_after_raw.delete if e.category_id != CAT_SIM],
         )
 
         remaining = (
