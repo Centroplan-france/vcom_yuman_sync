@@ -1,0 +1,81 @@
+name: Sync Supabase to Yuman Daily
+
+on:
+  # Déclenchement quotidien à 7h15 UTC (8h15 Paris en hiver, 9h15 en été)
+  schedule:
+    - cron: '15 7 * * *'
+  
+  # Déclenchement manuel via l'interface GitHub
+  workflow_dispatch:
+    inputs:
+      site_key:
+        description: 'Site spécifique à synchroniser (optionnel)'
+        required: false
+        type: string
+      dry_run:
+        description: 'Mode dry-run (diagnostic sans modification)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  sync-supabase-to-yuman:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        run: |
+          pip install poetry
+          poetry config virtualenvs.create false
+
+      - name: Install dependencies
+        run: poetry install
+
+      - name: Run sync Supabase → Yuman
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          YUMAN_API_KEY: ${{ secrets.YUMAN_API_KEY }}
+          LOG_LEVEL: INFO
+        run: |
+          # Construire les arguments
+          ARGS="--yes --no-color"
+          
+          # Ajouter --dry-run si demandé (workflow_dispatch)
+          if [ "${{ github.event.inputs.dry_run }}" == "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          
+          # Ajouter --site-key si spécifié (workflow_dispatch)
+          if [ -n "${{ github.event.inputs.site_key }}" ]; then
+            ARGS="$ARGS --site-key ${{ github.event.inputs.site_key }}"
+          fi
+          
+          echo "Running: poetry run python -m vysync.sync_supabase_to_yuman $ARGS"
+          poetry run python -m vysync.sync_supabase_to_yuman $ARGS
+
+      - name: Upload JSON report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-sb-to-yuman-report-${{ github.run_number }}
+          path: logs/sync_sb_to_yuman_*.json
+          retention-days: 30
+
+      - name: Upload debug logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-logs-${{ github.run_number }}
+          path: |
+            logs/*.json
+            *.log
+          retention-days: 7
