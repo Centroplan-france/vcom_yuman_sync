@@ -231,6 +231,14 @@ def sync_supabase_to_yuman(
             if e.site_id not in ignored_supabase_site_ids
         }
 
+        # Filtrer les équipements dont le site n'a pas de yuman_site_id
+        # Ces équipements ne peuvent pas être créés dans Yuman
+        sites_with_yuman_id = {s.id for s in sb_sites.values() if s.yuman_site_id}
+        sb_equips = {
+            k: e for k, e in sb_equips.items()
+            if e.site_id in sites_with_yuman_id
+        }
+
         if site_key:
             sb_equips = {k: e for k, e in sb_equips.items() if e.site_id in target_supabase_site_ids}
 
@@ -362,7 +370,7 @@ def sync_supabase_to_yuman(
             })
 
         # Sites updated with field changes
-        site_fields = ['name', 'address', 'latitude', 'longitude', 'nominal_power', 'commission_date']
+        site_fields = ['name', 'address', 'latitude', 'longitude', 'nominal_power', 'commission_date', 'vcom_system_key']
         for old, new in patch_sites.update:
             changes = {}
             for field in site_fields:
