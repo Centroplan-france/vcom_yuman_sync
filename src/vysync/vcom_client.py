@@ -348,7 +348,52 @@ class VCOMAPIClient:
             f"/systems/{system_key}/power-plant-controllers/{device_id}/abbreviations/{abbreviation_id}/measurements",
             params=params
         ).json().get("data", {})
-    
+
+    def get_ppc_bulk_measurements(
+        self,
+        system_key: str,
+        from_time: datetime,
+        to_time: datetime,
+        resolution: str = "interval",
+        device_ids: list[str] | None = None,
+        abbreviations: list[str] | None = None
+    ) -> Dict[str, Any]:
+        """
+        Récupère les mesures bulk de tous les PPC d'un site en un seul appel.
+
+        Args:
+            system_key: Clé du système
+            from_time: Date/heure de début (max 24h de plage)
+            to_time: Date/heure de fin
+            resolution: interval, minute, fifteen-minutes, thirty-minutes, hour, day
+            device_ids: Liste optionnelle d'IDs de PPC à filtrer
+            abbreviations: Liste optionnelle d'abréviations à filtrer
+
+        Returns:
+            Dict avec structure : {
+                "timestamp1": {
+                    "controller_id1": {"abbr1": value, "abbr2": value, ...},
+                    ...
+                },
+                ...
+            }
+        """
+        params = {
+            "from": from_time.isoformat(),
+            "to": to_time.isoformat(),
+            "resolution": resolution
+        }
+        if device_ids:
+            params["deviceIds"] = ",".join(str(d) for d in device_ids)
+        if abbreviations:
+            params["abbreviations"] = ",".join(abbreviations)
+
+        return self._make_request(
+            "GET",
+            f"/systems/{system_key}/power-plant-controllers/bulk/measurements",
+            params=params
+        ).json()
+
     def get_bulk_measurements(
         self,
         abbreviation_id: str,

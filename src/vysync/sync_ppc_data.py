@@ -67,164 +67,129 @@ def fetch_ppc_setpoint(
     nominal_power: Optional[float]
 ) -> Dict[str, Any]:
     """
-    Récupère la consigne PPC pour un site avec fallback automatique.
+    Récupère la consigne PPC pour un site avec logique basée sur MODE.
 
-    Utilise un système de priorité pour choisir la meilleure abréviation disponible :
-    1. PPC_P_SET_ABS (valeur absolue en W) - préféré
-    2. PPC_P_SET_GRIDOP_REL (valeur relative en %) - fallback 1
-    3. PPC_P_SET_REL (valeur relative en %) - fallback 2
+    Utilise l'endpoint bulk pour récupérer toutes les mesures en un appel,
+    puis sélectionne la source de données selon PPC_P_SET_MODE :
+    - MODE = 1 (production active) → utilise PPC_P_SET_ABS (W → kW)
+    - MODE = 201 (standby/nuit) → utilise PPC_P_SET_GRIDOP_REL (% → kW)
+    - MODE inconnu → fallback sur priorité (ABS > GRIDOP_REL > REL)
 
-    Gère trois cas distincts :
-    - no_ppc : Aucun controller PPC trouvé sur le site
-    - no_data : PPC existe mais pas de mesure récente (perte de communication)
-    - ok : PPC existe avec mesure valide
+    Note: nominal_power dans Supabase est en kW.
 
     Args:
         vc: Client VCOM API
         system_key: Clé du système VCOM (ex: "WC6HQ")
-        nominal_power: Puissance nominale du site en W (nécessaire pour conversion % → kW)
+        nominal_power: Puissance nominale du site en kW
 
     Returns:
         Dict avec l'une des structures suivantes :
-
         - {"status": "no_ppc"} si aucun PPC trouvé
-        - {"status": "no_data"} si PPC existe mais pas de mesure (perte de com)
-        - {"status": "ok", "data": {
-              "controller_id": str,
-              "setpoint_kw": float,
-              "timestamp": str (ISO format)
-          }} si données OK
-
-    Example:
-        >>> result = fetch_ppc_setpoint(vc, "WC6HQ", 5000.0)
-        >>> if result["status"] == "ok":
-        ...     print(f"Setpoint: {result['data']['setpoint_kw']} kW")
+        - {"status": "no_data"} si PPC existe mais pas de mesure valide
+        - {"status": "ok", "data": {...}} si données OK
     """
     try:
         # 1. Récupérer les power plant controllers du site
         controllers = vc.get_power_plant_controllers(system_key)
 
-        # CAS 1 : Aucun controller trouvé
         if not controllers:
             logger.info("Site %s: No PPC found", system_key)
             return {"status": "no_ppc"}
 
-        # Prendre le premier controller (comme dans le script de test)
         controller = controllers[0]
-        controller_id = controller["id"]
+        controller_id = str(controller["id"])
         logger.debug("Site %s: Found PPC controller %s", system_key, controller_id)
 
-        # 2. Lister les abréviations disponibles pour ce controller
-        available_abbreviations = vc.get_ppc_abbreviations(system_key, controller_id)
-        logger.debug("Site %s: Available abbreviations: %s", system_key, available_abbreviations)
-
-        # 3. Déterminer quelle abréviation utiliser (ordre de priorité)
-        target_abbr = None
-        for abbr in PPC_ABBREVIATIONS_PRIORITY:
-            if abbr in available_abbreviations:
-                target_abbr = abbr
-                logger.debug("Site %s: Using abbreviation %s", system_key, target_abbr)
-                break
-
-        if target_abbr is None:
-            logger.warning("Site %s: No relevant PPC abbreviation found in %s",
-                         system_key, available_abbreviations)
-            return {"status": "no_data"}
-
-        # 4. Récupérer la période de mesure
+        # 2. Récupérer la période de mesure
         from_time, to_time = get_measurement_period()
 
-        # 5. Récupérer les mesures pour l'abréviation choisie
-        measurements = vc.get_ppc_measurements(
-            system_key=system_key,
-            device_id=controller_id,
-            abbreviation_id=target_abbr,
-            from_time=from_time,
-            to_time=to_time,
-            resolution="interval"
+        # 3. Récupérer toutes les mesures en bulk (1 seul appel API)
+        bulk_data = vc.get_ppc_bulk_measurements(
+            system_key, from_time, to_time, resolution="interval"
         )
 
-        # 6. Vérifier si des mesures existent et les parser correctement
-        # Structure de la réponse : {controller_id: {abbr_id: [list]}}
-
-        if not measurements:
-            logger.info("Site %s: Empty response from API (no data for period)", system_key)
+        if not bulk_data:
+            logger.warning("Site %s: Empty bulk response", system_key)
             return {"status": "no_data"}
 
-        # Extraire les mesures du controller
-        if controller_id not in measurements:
-            logger.info("Site %s: Controller %s not in measurements response",
-                       system_key, controller_id)
+        # 4. Extraire la dernière mesure
+        timestamps = sorted(bulk_data.keys())
+        last_ts = timestamps[-1]
+
+        if controller_id not in bulk_data[last_ts]:
+            logger.warning("Site %s: Controller %s not in bulk response",
+                         system_key, controller_id)
             return {"status": "no_data"}
 
-        controller_measurements = measurements[controller_id]
+        measurements = bulk_data[last_ts][controller_id]
 
-        # Extraire les mesures de l'abréviation
-        if target_abbr not in controller_measurements:
-            logger.info("Site %s: Abbreviation %s not in controller measurements",
-                       system_key, target_abbr)
-            return {"status": "no_data"}
+        # 5. Lire les valeurs
+        mode = measurements.get('PPC_P_SET_MODE')
+        abs_value = measurements.get('PPC_P_SET_ABS')
+        gridop_rel_value = measurements.get('PPC_P_SET_GRIDOP_REL')
+        rel_value = measurements.get('PPC_P_SET_REL')
 
-        measurements_list = controller_measurements[target_abbr]
+        logger.debug("Site %s: MODE=%s, ABS=%s, GRIDOP_REL=%s, REL=%s",
+                    system_key, mode, abs_value, gridop_rel_value, rel_value)
 
-        # Vérifier que la liste n'est pas vide
-        if not isinstance(measurements_list, list) or len(measurements_list) == 0:
-            logger.info("Site %s: No measurements in list for %s",
-                       system_key, target_abbr)
-            return {"status": "no_data"}
+        # 6. Appliquer la logique basée sur MODE
+        setpoint_kw = None
+        source = None
 
-        # Prendre la dernière mesure
-        recent_measurement = measurements_list[-1]
+        if mode == 1:
+            # MODE 1 = Production active → utiliser ABS
+            if abs_value is not None:
+                setpoint_kw = abs_value / 1000.0  # W → kW
+                source = "PPC_P_SET_ABS"
+                logger.debug("Site %s: MODE=1, using ABS: %s W → %.2f kW",
+                           system_key, abs_value, setpoint_kw)
 
-        # CAS 2 : Mesure existe mais valeur est None
-        if recent_measurement is None:
-            logger.info("Site %s: PPC %s exists but measurement is None",
-                       system_key, controller_id)
-            return {"status": "no_data"}
+        elif mode == 201:
+            # MODE 201 = Standby → utiliser GRIDOP_REL
+            if gridop_rel_value is not None:
+                if nominal_power is None or nominal_power <= 0:
+                    logger.warning("Site %s: MODE=201 but nominal_power=%s, cannot convert",
+                                 system_key, nominal_power)
+                    return {"status": "no_data"}
+                # nominal_power est en kW, pas besoin de diviser par 1000
+                setpoint_kw = nominal_power * gridop_rel_value / 100.0
+                source = "PPC_P_SET_GRIDOP_REL"
+                logger.debug("Site %s: MODE=201, using GRIDOP_REL: %.2f kW × %.2f%% = %.2f kW",
+                           system_key, nominal_power, gridop_rel_value, setpoint_kw)
 
-        # CAS 3 : PPC existe ET mesure disponible
-        measurement_value = recent_measurement.get("value")
-        measurement_timestamp = recent_measurement.get("timestamp")
-
-        if measurement_value is None:
-            logger.warning("Site %s: PPC %s has measurement but value is None",
-                          system_key, controller_id)
-            return {"status": "no_data"}
-
-        # 7. Convertir la valeur en kW selon la source
-        if target_abbr == "PPC_P_SET_ABS":
-            # Valeur absolue : W → kW
-            setpoint_kw = measurement_value / 1000.0
-            logger.debug("Site %s: Converted from W to kW: %.2f", system_key, setpoint_kw)
         else:
-            # Valeur relative : % → kW (nécessite nominal_power)
-            # Note: nominal_power dans Supabase est déjà en kW
-            if nominal_power is None or nominal_power <= 0:
-                logger.warning("Site %s: nominal_power is %s, cannot calculate kW from percentage",
-                             system_key, nominal_power)
-                return {"status": "no_data"}
+            # MODE inconnu ou None → fallback sur priorité
+            logger.debug("Site %s: MODE=%s (unknown), using fallback logic", system_key, mode)
 
-            # Calcul : nominal_power (kW) × % / 100 → kW
-            setpoint_kw = nominal_power * measurement_value / 100.0
-            logger.debug("Site %s: Converted from %% to kW: %.2f%% × %.2f kW = %.2f kW",
-                       system_key, measurement_value, nominal_power, setpoint_kw)
+            if abs_value is not None and abs_value != 0:
+                setpoint_kw = abs_value / 1000.0
+                source = "PPC_P_SET_ABS (fallback)"
+            elif gridop_rel_value is not None and nominal_power and nominal_power > 0:
+                setpoint_kw = nominal_power * gridop_rel_value / 100.0
+                source = "PPC_P_SET_GRIDOP_REL (fallback)"
+            elif rel_value is not None and nominal_power and nominal_power > 0:
+                setpoint_kw = nominal_power * rel_value / 100.0
+                source = "PPC_P_SET_REL (fallback)"
 
-        logger.info("Site %s: PPC setpoint = %.2f kW (timestamp: %s)",
-                   system_key, setpoint_kw, measurement_timestamp)
+        # 7. Vérifier qu'on a une valeur
+        if setpoint_kw is None:
+            logger.warning("Site %s: No valid setpoint found (MODE=%s)", system_key, mode)
+            return {"status": "no_data"}
+
+        logger.info("Site %s: PPC setpoint = %.2f kW (source: %s, timestamp: %s)",
+                   system_key, setpoint_kw, source, last_ts)
 
         return {
             "status": "ok",
             "data": {
                 "controller_id": controller_id,
                 "setpoint_kw": setpoint_kw,
-                "timestamp": measurement_timestamp
+                "timestamp": last_ts
             }
         }
 
     except Exception as e:
         logger.error("Error fetching PPC data for site %s: %s", system_key, e)
-        # En cas d'erreur API, on considère que c'est un problème temporaire
-        # On ne met pas à jour la DB (comme no_data)
         return {"status": "error", "error": str(e)}
 
 
@@ -353,7 +318,7 @@ def sync_all_sites() -> None:
         try:
             logger.info("Processing site %d (%s - %s, nominal_power=%.2f kW)",
                       site_id, system_key, site_name,
-                      nominal_power / 1000.0 if nominal_power else 0)
+                      nominal_power if nominal_power else 0)
 
             # Récupérer les données PPC
             ppc_data = fetch_ppc_setpoint(vc, system_key, nominal_power)
