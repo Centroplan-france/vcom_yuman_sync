@@ -9,7 +9,7 @@ dans Supabase. Utilise un système de fallback automatique :
 3. PPC_P_SET_REL (en %) en dernier recours
 
 Fréquence recommandée : Une fois par semaine (suggéré : samedi)
-Période de mesure : Veille à 18h-19h UTC (données consolidées)
+Période de mesure : Veille à 12h-13h UTC (midi, production garantie)
 
 Usage:
     poetry run python -m vysync.sync_ppc_data
@@ -31,16 +31,17 @@ PPC_ABBREVIATIONS_PRIORITY = [
     "PPC_P_SET_GRIDOP_REL",  # Valeur relative en % (fallback 1)
     "PPC_P_SET_REL"          # Valeur relative en % (fallback 2)
 ]
-MEASUREMENT_HOUR_START = 18  # 18h UTC
+MEASUREMENT_HOUR_START = 12  # 12h UTC (midi, production garantie)
 MEASUREMENT_DURATION = 1  # 1 heure
 
 
 def get_measurement_period() -> tuple[datetime, datetime]:
     """
-    Retourne la période de mesure : veille à 18h-19h UTC.
+    Retourne la période de mesure : veille à 12h-13h UTC.
 
-    La période de 18h-19h UTC est choisie car c'est le moment où les données
-    sont consolidées et fiables.
+    La période de 12h-13h UTC (midi) est choisie car c'est le moment où la
+    production solaire est garantie en France, évitant les valeurs à 0
+    dues au mode standby (MODE=201) pendant la nuit.
 
     Returns:
         Tuple (from_time, to_time) en datetime avec timezone UTC
@@ -48,8 +49,8 @@ def get_measurement_period() -> tuple[datetime, datetime]:
     Example:
         >>> from_time, to_time = get_measurement_period()
         >>> # Si aujourd'hui est 2025-10-31 14:00:00 UTC
-        >>> # from_time = 2025-10-30 18:00:00 UTC
-        >>> # to_time = 2025-10-30 19:00:00 UTC
+        >>> # from_time = 2025-10-30 12:00:00 UTC
+        >>> # to_time = 2025-10-30 13:00:00 UTC
     """
     now = datetime.now(timezone.utc)
     yesterday = now - timedelta(days=1)
@@ -197,15 +198,16 @@ def fetch_ppc_setpoint(
             logger.debug("Site %s: Converted from W to kW: %.2f", system_key, setpoint_kw)
         else:
             # Valeur relative : % → kW (nécessite nominal_power)
+            # Note: nominal_power dans Supabase est déjà en kW
             if nominal_power is None or nominal_power <= 0:
                 logger.warning("Site %s: nominal_power is %s, cannot calculate kW from percentage",
                              system_key, nominal_power)
                 return {"status": "no_data"}
 
-            # Calcul : (nominal_power × % / 100) / 1000 → kW
-            setpoint_kw = (nominal_power * measurement_value / 100.0) / 1000.0
+            # Calcul : nominal_power (kW) × % / 100 → kW
+            setpoint_kw = nominal_power * measurement_value / 100.0
             logger.debug("Site %s: Converted from %% to kW: %.2f%% × %.2f kW = %.2f kW",
-                       system_key, measurement_value, nominal_power / 1000.0, setpoint_kw)
+                       system_key, measurement_value, nominal_power, setpoint_kw)
 
         logger.info("Site %s: PPC setpoint = %.2f kW (timestamp: %s)",
                    system_key, setpoint_kw, measurement_timestamp)
