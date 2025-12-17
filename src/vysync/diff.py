@@ -179,13 +179,21 @@ def _equip_equals(a: Equipment, b: Equipment, ignore_fields: Optional[Set[str]] 
             da["serial_number"]       == db["serial_number"]
         )
     elif cat == CAT_INVERTER:
-        # INVERTER : brand (standard), model (custom field "Modèle")
-        # name est non-modifiable donc ignoré
+        # INVERTER : brand, model, name, name_inverter, carport
+        # Normaliser les nouveaux champs
+        for d in (da, db):
+            d["name"] = (d.get("name") or "").strip()
+            d["name_inverter"] = (d.get("name_inverter") or "").strip()
+            d["carport"] = bool(d.get("carport", False))
+
         return (
             da["brand"].lower()       == db["brand"].lower() and
             da["model"].lower()       == db["model"].lower() and
             da["serial_number"]       == db["serial_number"] and
-            da["vcom_device_id"]      == db["vcom_device_id"]
+            da["vcom_device_id"]      == db["vcom_device_id"] and
+            da["name"]                == db["name"] and
+            da["name_inverter"]       == db["name_inverter"] and
+            da["carport"]             == db["carport"]
         )
     elif cat == CAT_CENTRALE:
         # CENTRALE : uniquement serial_number

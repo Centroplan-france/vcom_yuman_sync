@@ -19,7 +19,7 @@ from vysync.adapters.supabase_adapter import SupabaseAdapter
 from vysync.adapters.vcom_adapter import fetch_snapshot
 from vysync.diff import PatchSet, diff_entities
 from vysync.logging_config import setup_logging
-from vysync.models import CAT_CENTRALE, CAT_SIM
+from vysync.models import CAT_CENTRALE, CAT_SIM, CAT_INVERTER
 from vysync.vcom_client import VCOMAPIClient
 
 logger = logging.getLogger(__name__)
@@ -227,21 +227,39 @@ def sync_vcom_to_supabase() -> dict:
             delete=[],
         )
 
-    # FILTRAGE : Suppressions (sécurité)
+    # FILTRAGE : Suppressions (marquage obsolète pour onduleurs uniquement)
     if patch_equips.delete:
-        logger.warning(
-            "⚠️  %d équipements absents de VCOM → pas de suppression automatique",
-            len(patch_equips.delete),
-        )
+        # Séparer les onduleurs (peuvent être marqués obsolètes) des autres équipements
+        inverters_to_delete = [e for e in patch_equips.delete if e.category_id == CAT_INVERTER]
+        other_to_delete = [e for e in patch_equips.delete if e.category_id != CAT_INVERTER]
+
+        if other_to_delete:
+            logger.warning(
+                "⚠️  %d équipements non-onduleurs absents de VCOM → pas de suppression automatique",
+                len(other_to_delete),
+            )
+
+        if inverters_to_delete:
+            logger.info(
+                "🗑️  %d onduleurs orphelins détectés → marquage is_obsolete=True",
+                len(inverters_to_delete),
+            )
+            for inv in inverters_to_delete:
+                logger.info(
+                    "   • Onduleur orphelin: serial=%s, vcom_device_id=%s",
+                    inv.serial_number, inv.vcom_device_id
+                )
+
         patch_equips = PatchSet(
             add=patch_equips.add,
             update=patch_equips.update,
-            delete=[],
+            delete=inverters_to_delete,  # Seuls les onduleurs peuvent être marqués obsolètes
         )
 
     logger.info("\nAprès filtrage :")
     logger.info("  • Équipements à ajouter : %d", len(patch_equips.add))
     logger.info("  • Équipements à modifier : %d", len(patch_equips.update))
+    logger.info("  • Onduleurs à marquer obsolètes : %d", len(patch_equips.delete))
 
     # ═══════════════════════════════════════════════════════════════
     # PHASE 3 : APPLICATION DES CHANGEMENTS

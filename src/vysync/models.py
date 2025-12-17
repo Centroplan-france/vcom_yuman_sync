@@ -62,6 +62,8 @@ class Equipment:
     serial_number: Optional[str] = None
     count: Optional[int] = None                # ex-string_count ?
     parent_id: Optional[str] = None
+    name_inverter: Optional[str] = None        # Nom VCOM brut de l'onduleur
+    carport: bool = False                      # True si détecté comme carport/ombrière
 
 
 

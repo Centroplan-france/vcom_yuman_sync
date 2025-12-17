@@ -10,6 +10,7 @@ from typing import Dict, Tuple, Any
 import logging
 from vysync.app_logging import _dump
 from vysync.models import Site, Equipment, CAT_INVERTER, CAT_MODULE, CAT_STRING
+from vysync.inverter_parser import parse_vcom_inverter_name
 
 logger = logging.getLogger(__name__)
 
@@ -117,17 +118,54 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
         # --- Onduleurs -----------------------------------------------------------
         inverters = vc.get_inverters(key)
 
+        # Préparer le fallback depuis systemConfigurations (tech-data)
+        sys_configs = tech.get("systemConfigurations", [])
+
         # on garantit un ordre stable pour attribuer les index (WR 1, WR 2, …)
         for idx, inv in enumerate(inverters, start=1):
-            # Source unique et fiable : get_inverter_details()
-            det_inv = vc.get_inverter_details(key, inv["id"])
-            brand = det_inv.get("vendor") or None
-            model = det_inv.get("model") or None
+            # Nom VCOM brut de l'onduleur
+            inv_name_vcom = inv.get("name") or ""
 
-            # Si vide : on log mais on ne remplace pas (protection des données DB)
-            if not brand or not model:
+            # Parser le nom VCOM pour extraire WR#, vendor, model, carport
+            parsed = parse_vcom_inverter_name(inv_name_vcom)
+
+            # WR number: priorité au parsing, sinon index API
+            wr_number = parsed.wr_number if parsed.wr_number is not None else idx
+
+            # Nom DB standardisé basé sur wr_number réel
+            name_db = f"WR {wr_number} - Onduleur"
+
+            # Source 1: get_inverter_details() (API /inverters/{id})
+            det_inv = vc.get_inverter_details(key, inv["id"])
+            brand_api = det_inv.get("vendor") or None
+            model_api = det_inv.get("model") or None
+
+            # Source 2 (fallback): systemConfigurations[index].inverter (tech-data)
+            brand_tech = None
+            model_tech = None
+            if idx <= len(sys_configs):
+                inverter_config = sys_configs[idx - 1].get("inverter", {})
+                brand_tech = inverter_config.get("vendor") or None
+                model_tech = inverter_config.get("model") or None
+
+            # Logique de priorité vendor/model:
+            # 1. Si /inverters/{id} a vendor ET model remplis → utiliser
+            # 2. Sinon → utiliser tech-data systemConfigurations[index].inverter
+            if brand_api and model_api:
+                brand = brand_api
+                model = model_api
+            elif brand_tech or model_tech:
+                brand = brand_tech or brand_api
+                model = model_tech or model_api
+                logger.info(
+                    f"📋 Onduleur {inv['id']} (site {key}): fallback tech-data → "
+                    f"vendor={brand}, model={model}"
+                )
+            else:
+                brand = brand_api
+                model = model_api
                 logger.warning(
-                    f"⚠️  Onduleur {inv['id']} (site {key}) sans vendor/model dans l'API VCOM"
+                    f"⚠️  Onduleur {inv['id']} (site {key}) sans vendor/model dans API ni tech-data"
                 )
 
             inv_eq = Equipment(
@@ -135,10 +173,12 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
                 category_id     = CAT_INVERTER,
                 eq_type         = "inverter",
                 vcom_device_id  = inv["id"],
-                name            = f"WR {idx} - Onduleur",
-                brand           = brand,  # Peut être None
-                model           = model,  # Peut être None
+                name            = name_db,
+                brand           = brand,
+                model           = model,
                 serial_number   = inv.get("serial"),
+                name_inverter   = inv_name_vcom if inv_name_vcom else None,
+                carport         = parsed.is_carport,
             )
             equips[inv_eq.key()] = inv_eq
 
