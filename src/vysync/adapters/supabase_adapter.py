@@ -196,6 +196,8 @@ class SupabaseAdapter:
                     count=r.get("count"),
                     parent_id=r.get("parent_id"),
                     yuman_material_id=r.get("yuman_material_id"),
+                    name_inverter=r.get("name_inverter"),
+                    carport=bool(r.get("carport", False)),
                 )
                 equips[serial] = eq
             if len(page) < step:
@@ -232,6 +234,8 @@ class SupabaseAdapter:
                     count=r.get("count"),
                     parent_id=r.get("parent_id"),
                     yuman_material_id=r.get("yuman_material_id"),
+                    name_inverter=r.get("name_inverter"),
+                    carport=bool(r.get("carport", False)),
                 )
                 equips[serial] = eq
             if len(page) < step:
@@ -376,7 +380,8 @@ class SupabaseAdapter:
             "parent_id", "is_obsolete", "obsolete_at", "count",
             "eq_type", "vcom_device_id",
             "serial_number", "brand", "model", "name", "site_id",
-            "created_at", "extra", "yuman_material_id", "category_id"
+            "created_at", "extra", "yuman_material_id", "category_id",
+            "name_inverter", "carport"  # Nouveaux champs onduleurs
         }
         now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -543,7 +548,8 @@ class SupabaseAdapter:
             "parent_id", "is_obsolete", "obsolete_at", "count",
             "eq_type", "vcom_device_id",
             "serial_number", "brand", "model", "name", "site_id",
-            "created_at", "extra", "yuman_material_id", "category_id"
+            "created_at", "extra", "yuman_material_id", "category_id",
+            "name_inverter", "carport"  # Nouveaux champs onduleurs
         }
         now_iso = datetime.now(timezone.utc).isoformat()
 
