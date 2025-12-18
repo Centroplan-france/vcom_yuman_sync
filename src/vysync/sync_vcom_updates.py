@@ -136,9 +136,9 @@ def sync_vcom_to_supabase() -> dict:
     logger.info("  ✓ Sites VCOM : %d", len(v_sites))
     logger.info("  ✓ Équipements VCOM : %d", len(v_equips))
 
-    logger.info("\nRécupération données Supabase...")
+    logger.info("\nRécupération données Supabase (y compris obsolètes pour comparaison)...")
     db_sites = sb.fetch_sites_v()
-    db_equips = sb.fetch_equipments_v()
+    db_equips = sb.fetch_equipments_v(include_obsolete=True)
     logger.info("  ✓ Sites Supabase : %d", len(db_sites))
     logger.info("  ✓ Équipements Supabase : %d", len(db_equips))
 

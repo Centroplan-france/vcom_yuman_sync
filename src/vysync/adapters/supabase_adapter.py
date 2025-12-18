@@ -155,16 +155,14 @@ class SupabaseAdapter:
         return sites
 
     # --------------------------- EQUIPMENTS ----------------------------
-    def fetch_equipments_v(self, site_key: Optional[str] = None) -> Dict[str, Equipment]:
+    def fetch_equipments_v(self, site_key: Optional[str] = None, include_obsolete: bool = False) -> Dict[str, Equipment]:
         equips = {}
         from_row, step = 0, 1000       # page de 1 000
         while True:
             # 1. Prépare la requête de base
-            query = (
-                self.sb.table(EQUIP_TABLE)
-                .select("*")
-                .eq("is_obsolete", False)
-            )
+            query = self.sb.table(EQUIP_TABLE).select("*")
+            if not include_obsolete:
+                query = query.eq("is_obsolete", False)
 
             # 2. Ajoute le filtre site si demandé
             if site_key:
@@ -181,8 +179,8 @@ class SupabaseAdapter:
                 or []
             )
             for r in page:
-                # Normaliser le serial_number (trim espaces)
-                serial = (r.get("serial_number") or "").strip()
+                # Normaliser le serial_number (trim + majuscules)
+                serial = _norm_serial(r.get("serial_number"))
 
                 eq = Equipment(
                     site_id=r["site_id"],
@@ -219,8 +217,8 @@ class SupabaseAdapter:
                 .data or []
             )
             for r in page:
-                # Normaliser le serial_number (trim espaces)
-                serial = (r.get("serial_number") or "").strip()
+                # Normaliser le serial_number (trim + majuscules)
+                serial = _norm_serial(r.get("serial_number"))
 
                 eq = Equipment(
                     site_id=r["site_id"],

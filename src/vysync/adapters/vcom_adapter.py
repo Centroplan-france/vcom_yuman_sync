@@ -15,6 +15,11 @@ from vysync.inverter_parser import parse_vcom_inverter_name
 logger = logging.getLogger(__name__)
 
 
+def _norm_serial(s: str | None) -> str:
+    """Normalise un serial_number : strip + majuscules."""
+    return (s or "").strip().upper()
+
+
 def build_address(addr: Dict[str, Any]) -> str | None:
     if not addr:
         return None
@@ -176,7 +181,7 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
                 name            = name_db,
                 brand           = brand,
                 model           = model,
-                serial_number   = inv.get("serial"),
+                serial_number   = _norm_serial(inv.get("serial")),
                 name_inverter   = inv_name_vcom if inv_name_vcom else None,
                 carport         = parsed.is_carport,
             )
