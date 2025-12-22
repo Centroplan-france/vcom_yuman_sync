@@ -54,6 +54,9 @@ def upsert_monthly_analytics(
     """
     Insert/update une ligne dans monthly_analytics.
 
+    IMPORTANT: Ne jamais écraser une valeur existante avec NULL.
+    Récupère d'abord les données existantes et fusionne intelligemment.
+
     Args:
         sb: Adapter Supabase
         site_id: ID du site dans sites_mapping
@@ -74,34 +77,60 @@ def upsert_monthly_analytics(
     """
     now_iso = datetime.now(timezone.utc).isoformat()
 
-    # Calcul is_complete : TRUE si les 4 données essentielles sont présentes
-    is_complete = all([
-        data.get("production_kwh") is not None,
-        data.get("irradiance_avg") is not None,
-        data.get("performance_ratio") is not None,
-        data.get("availability") is not None
-    ])
+    # 1. Récupérer les données existantes
+    existing = None
+    try:
+        result = sb.sb.table("monthly_analytics")\
+            .select("*")\
+            .eq("site_id", site_id)\
+            .eq("month", month)\
+            .maybe_single()\
+            .execute()
+        existing = result.data
+    except Exception:
+        pass  # Pas de données existantes
 
-    # Calcul has_meter_data : TRUE si au moins une donnée meter est présente
-    has_meter_data = any([
-        data.get("grid_export_kwh") is not None,
-        data.get("grid_import_kwh") is not None
-    ])
+    # 2. Fusionner : ne jamais écraser avec NULL
+    fields = [
+        "production_kwh",
+        "irradiance_avg",
+        "performance_ratio",
+        "availability",
+        "grid_export_kwh",
+        "grid_import_kwh",
+        "meter_id"
+    ]
 
     row = {
         "site_id": site_id,
         "month": month,
-        "production_kwh": data.get("production_kwh"),
-        "irradiance_avg": data.get("irradiance_avg"),
-        "performance_ratio": data.get("performance_ratio"),
-        "availability": data.get("availability"),
-        "grid_export_kwh": data.get("grid_export_kwh"),
-        "grid_import_kwh": data.get("grid_import_kwh"),
-        "meter_id": data.get("meter_id"),
-        "has_meter_data": has_meter_data,
-        "is_complete": is_complete,
         "updated_at": now_iso,
     }
+
+    for field in fields:
+        new_value = data.get(field)
+        existing_value = existing.get(field) if existing else None
+
+        # Règle : ne jamais écraser une valeur existante avec NULL
+        if new_value is not None:
+            row[field] = new_value
+        elif existing_value is not None:
+            row[field] = existing_value
+        else:
+            row[field] = None
+
+    # 3. Recalculer is_complete et has_meter_data
+    row["is_complete"] = all([
+        row.get("production_kwh") is not None,
+        row.get("irradiance_avg") is not None,
+        row.get("performance_ratio") is not None,
+        row.get("availability") is not None
+    ])
+
+    row["has_meter_data"] = any([
+        row.get("grid_export_kwh") is not None,
+        row.get("grid_import_kwh") is not None
+    ])
 
     try:
         sb.sb.table("monthly_analytics").upsert(row, on_conflict="site_id,month").execute()
