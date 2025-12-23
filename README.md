@@ -13,7 +13,7 @@ Persistence relies solely on Supabase's REST API—no local SQL database or SQLM
 The synchronization handles three main data flows:
 
 - **Asset Management**: Synchronizes solar installations (sites, inverters, modules, PV strings) between VCOM and Yuman
-- **Ticket Management**: Transfers VCOM maintenance tickets to Yuman work orders automatically  
+- **Ticket Management**: Transfers VCOM maintenance tickets to Yuman work orders automatically
 - **Data Integrity**: Maintains consistent mappings and resolves conflicts between systems
 
 ## How It Works
@@ -30,7 +30,7 @@ All synchronization state is tracked in Supabase tables exposed through its REST
 
 ### Requirements
 
-- **Python 3.11** 
+- **Python 3.11**
 - [Poetry](https://python-poetry.org/) (recommended) or pip
 
 ### Installation
@@ -54,78 +54,150 @@ cp .env.example .env
 Edit `.env` with your actual credentials:
 
 ```dotenv
+# VCOM API credentials
 VCOM_API_KEY=your-vcom-api-key
 VCOM_USERNAME=your-vcom-username
 VCOM_PASSWORD=your-vcom-password
+
+# Yuman API
 YUMAN_TOKEN=your-yuman-token
+
+# Supabase (used by the application)
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_KEY=your-supabase-service-key
+
+# Legacy PostgreSQL connection (used by some workflows)
+DATABASE_URL=postgresql://user:password@host:5432/dbname
+
+# Logging
 LOG_LEVEL=INFO
 ```
 
 ### Basic Usage
 
 ```bash
-# Full synchronization
+# Full synchronization (slow, ~25 min)
 make sync_db
 make sync_tickets
 
-# Or run specific components
-poetry run python -m vysync.cli
+# Or run via Poetry directly
+poetry run python -m vysync.cli --mode full
 poetry run python -m vysync.sync_tickets_workorders
+```
+
+## CLI Modes
+
+The main CLI (`vysync.cli`) supports two synchronization modes:
+
+| Mode | Command | Duration | Use Case |
+|------|---------|----------|----------|
+| **quick** | `--mode quick` | ~10 seconds | Daily detection of new sites only |
+| **full** | `--mode full` | ~25 minutes | Weekly complete verification of all sites |
+
+### Examples
+
+```bash
+# Quick mode: detect new sites only (for daily cron)
+poetry run python -m vysync.cli --mode quick
+
+# Full mode: complete verification (for weekly audit)
+poetry run python -m vysync.cli --mode full
+
+# Process a specific site
+poetry run python -m vysync.cli --site-key TS9A8
+
+# Force complete update (ignore DB cache)
+poetry run python -m vysync.cli --mode full --maj-all
 ```
 
 ## Available Commands
 
 | Command | Description |
 |---------|-------------|
-| `make sync_db` | Synchronize sites and equipment data |
+| `make sync_db` | Synchronize sites and equipment data (full mode) |
 | `make sync_tickets` | Synchronize tickets and work orders |
 | `make test` | Run the test suite |
-| `make lint` | Check code quality |
+| `make lint` | Check code quality with ruff |
+| `make dev` | Install dependencies via Poetry |
+
+## Project Structure
+
+```
+src/vysync/
+├── adapters/
+│   ├── supabase_adapter.py   # Database operations via Supabase REST API
+│   ├── vcom_adapter.py       # VCOM data fetching and transformation
+│   └── yuman_adapter.py      # Yuman API interface with quota management
+├── cli.py                    # Main CLI entry point (sync_db)
+├── cli_analytics.py          # Analytics CLI
+├── vcom_client.py            # VCOM API client with rate limiting
+├── yuman_client.py           # Yuman API client
+├── sync_tickets_workorders.py # Ticket synchronization
+├── sync_new_sites.py         # New site detection
+├── conflict_resolution.py    # Conflict detection and resolution
+├── diff.py                   # Diff engine for entity comparison
+├── models.py                 # Data models
+└── ...
+
+scripts/
+├── diagnostics/              # Diagnostic and debugging scripts
+└── exploration/              # Exploratory/test scripts
+
+tests/                        # Test suite
+```
 
 ## Architecture
 
 ### Core Components
 
-- **VCOMAPIClient** – Production-ready VCOM API client with rate limiting
-- **YumanClient** – Yuman API interface with quota management  
-- **SupabaseAdapter** – Database operations and mapping storage via Supabase REST API
-- **Sync Engine** – Orchestrates the three-phase synchronization process
+- **VCOMAPIClient** (`vysync.vcom_client`) – Production-ready VCOM API client with rate limiting
+- **YumanClient** (`vysync.yuman_client`) – Yuman API interface with quota management
+- **SupabaseAdapter** (`vysync.adapters.supabase_adapter`) – Database operations and mapping storage via Supabase REST API
+- **Sync Engine** (`vysync.cli`) – Orchestrates the three-phase synchronization process
 
 ### Data Flow
 
 ```
-VCOM API → Local Snapshot → Diff Engine → Supabase (REST) → Yuman API
-    ↑                                                       ↓
-    ←──────────── Conflict Resolution ←─────────────────────
+VCOM API → VCOMAdapter → Diff Engine → SupabaseAdapter → YumanAdapter → Yuman API
+    ↑                                                                      ↓
+    ←─────────────────── Conflict Resolution ←─────────────────────────────
 ```
 
 ### Database Schema
 
-The system maintains several mapping tables:
-- `sites_mapping` – VCOM systems ↔ Yuman sites
-- `equipments_mapping` – Technical assets across platforms
+The system maintains several mapping tables in Supabase:
+- `sites` – VCOM systems ↔ Yuman sites mapping
+- `equipments` – Technical assets across platforms
 - `clients_mapping` – Customer information synchronization
 - `tickets` & `work_orders` – Maintenance workflow tracking
 
 ## Automation
 
-Daily synchronization runs automatically via GitHub Actions:
+Multiple GitHub Actions workflows run on schedules:
 
-```yaml
-# Runs every day at 7 AM Paris time
-- cron: '0 5 * * *'
-```
+| Workflow | Schedule | Description |
+|----------|----------|-------------|
+| `sync-tickets.yml` | Daily 7h Paris | Synchronize tickets and work orders |
+| `sync-new-sites.yml` | Daily | Detect new VCOM sites (quick mode) |
+| `sync_yuman_supabase.yml` | Scheduled | Sync Yuman → Supabase |
+| `sync_supabase_yuman.yml` | Scheduled | Sync Supabase → Yuman |
+| `sync_ppc_weekly.yml` | Weekly | PPC data synchronization |
+| `sync_analytics_monthly.yml` | Monthly | Analytics data sync |
+| `auto_merge_sites.yml` | Scheduled | Auto-merge site conflicts |
 
 ### GitHub Secrets Required
 
 Configure these repository secrets for automated runs:
 
-- `VCOM_API_KEY`
-- `VCOM_USERNAME` 
-- `VCOM_PASSWORD`
-- `YUMAN_TOKEN`
+| Secret | Description |
+|--------|-------------|
+| `VCOM_API_KEY` | VCOM API key |
+| `VCOM_USERNAME` | VCOM username |
+| `VCOM_PASSWORD` | VCOM password |
+| `YUMAN_TOKEN` | Yuman API token |
+| `SUPABASE_URL` | Supabase project URL |
+| `SUPABASE_SERVICE_KEY` | Supabase service role key |
+| `DATABASE_URL` | PostgreSQL connection string |
 
 ## Development
 
@@ -133,7 +205,10 @@ Configure these repository secrets for automated runs:
 
 ```bash
 # Run all tests
-python -m pytest -v
+poetry run pytest -v
+
+# Quick test run
+make test
 
 # Compile check
 python -m py_compile $(git ls-files '*.py')
@@ -143,6 +218,8 @@ python -m py_compile $(git ls-files '*.py')
 
 ```bash
 # Lint code
+make lint
+# or
 poetry run ruff check src tests
 ```
 
@@ -151,24 +228,37 @@ poetry run ruff check src tests
 ### VCOM Client Usage
 
 ```python
-from vcom_client import VCOMAPIClient
+from vysync.vcom_client import VCOMAPIClient
 
 client = VCOMAPIClient()
 systems = client.get_systems()
 print(f"{len(systems)} systems found")
 ```
 
-### Manual Sync Operations
+### Yuman Client Usage
 
 ```python
-from vysync.cli import main
-from vysync.sync_tickets_workorders import main as sync_tickets
+from vysync.yuman_client import YumanClient
 
-# Full sync
-main()
+client = YumanClient()
+sites = list(client.list_sites())
+print(f"{len(sites)} sites found")
+```
 
-# Tickets only  
-sync_tickets()
+### Running Sync Programmatically
+
+```python
+from vysync.vcom_client import VCOMAPIClient
+from vysync.adapters.supabase_adapter import SupabaseAdapter
+from vysync.adapters.yuman_adapter import YumanAdapter
+
+# Initialize clients
+vc = VCOMAPIClient()
+sb = SupabaseAdapter()
+ya = YumanAdapter(sb)
+
+# Use adapters for sync operations
+# See cli.py for full sync orchestration
 ```
 
 ## Troubleshooting
@@ -176,12 +266,23 @@ sync_tickets()
 ### Common Issues
 
 - **Rate Limiting**: Both APIs have usage limits. The clients handle this automatically with exponential backoff
-- **Data Conflicts**: Check the `conflicts` table in the database for resolution guidance
 - **Missing Mappings**: Run the full sync process to establish all required relationships
+- **Sync Conflicts**: The system includes automatic conflict detection and resolution in `conflict_resolution.py`
 
 ### Logging
 
 Set `LOG_LEVEL=DEBUG` in your `.env` file for detailed operation logs.
+
+Log files are written to the `logs/` directory:
+- `logs/debug_*.log` – Complete DEBUG logs
+- `logs/updates_*.log` – Equipment update details
+
+### Diagnostic Scripts
+
+Use scripts in `scripts/diagnostics/` to investigate issues:
+- `diagnose_site_diff.py` – Compare site data between sources
+- `diagnostic_site_conflicts.py` – Analyze site conflicts
+- `compare_3_sources.py` – Compare VCOM, Supabase, and Yuman data
 
 ## Project Status & Limitations
 
@@ -208,7 +309,7 @@ This synchronization system is currently in production use and handles real-worl
 
 Given the AI-generated nature of this codebase, contributions focusing on:
 - Code simplification and refactoring
-- Bug fixes and edge case handling  
+- Bug fixes and edge case handling
 - Documentation improvements
 - Test coverage expansion
 
