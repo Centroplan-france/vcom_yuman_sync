@@ -45,7 +45,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sync-new-sites-report-${{ github.run_number }}
-          path: sync_new_sites_*.json
+          path: logs/reports/sync_new_sites_*.json
           retention-days: 30
 
       - name: Upload debug logs
@@ -54,6 +54,6 @@ jobs:
         with:
           name: debug-logs-${{ github.run_number }}
           path: |
-            debug_*.log
-            updates_*.log
+            logs/debug_*.log
+            logs/updates_*.log
           retention-days: 7
