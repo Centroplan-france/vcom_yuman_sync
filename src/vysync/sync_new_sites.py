@@ -24,7 +24,7 @@ from vysync.vcom_client import VCOMAPIClient
 from vysync.adapters.supabase_adapter import SupabaseAdapter
 from vysync.adapters.vcom_adapter import fetch_snapshot
 from vysync.diff import PatchSet
-from vysync.logging_config import setup_logging
+from vysync.logging_config import setup_logging, get_reports_dir
 
 logger = logging.getLogger(__name__)
 
@@ -484,11 +484,11 @@ def sync_new_sites_and_names() -> dict:
     }
 
     # ── SAUVEGARDE DU RAPPORT EN FICHIER JSON ──
-    # Nom de fichier avec timestamp pour éviter les écrasements
-    report_filename = f"sync_new_sites_{datetime.now():%Y%m%d_%H%M%S}.json"
+    # Sauvegarde dans logs/reports/ avec timestamp
+    report_path = get_reports_dir() / f"sync_new_sites_{datetime.now():%Y%m%d_%H%M%S}.json"
 
     # Écriture du JSON avec indentation pour lisibilité
-    with open(report_filename, "w", encoding="utf-8") as f:
+    with open(report_path, "w", encoding="utf-8") as f:
         json.dump(
             report,
             f,
@@ -502,7 +502,7 @@ def sync_new_sites_and_names() -> dict:
     logger.info("  • Échecs création      : %d", len(new_sites_errors))
     logger.info("  • Changements de nom   : %d", len(name_changes))
     logger.info("  • Clients introuvables : %d", len(client_not_found_warnings))
-    logger.info("  • Rapport sauvegardé   : %s", report_filename)
+    logger.info("  • Rapport sauvegardé   : %s", report_path.name)
     logger.info("═" * 60)
 
     return report

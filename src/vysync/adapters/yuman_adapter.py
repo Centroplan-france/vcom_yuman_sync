@@ -16,7 +16,7 @@ Synchronisation Yuman ⇄ Supabase / VCOM.
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import asdict, fields as dc_fields
 import logging
-from vysync.app_logging import _dump
+from vysync.logging_config import dump
 from vysync.diff import diff_entities, PatchSet
 from vysync.models import (
     Site,
@@ -167,7 +167,7 @@ class YumanAdapter:
       logger.debug("[YUMAN] snapshot: %d sites",
                    len(sites),
                    )
-      _dump("[YUMAN] snapshot sites", sites)
+      dump("[YUMAN] snapshot sites", sites)
       return sites
 
     # ------------------------------------------------------------------ #
@@ -293,7 +293,7 @@ class YumanAdapter:
             equips[m["serial_number"]] = equip  # clé = serial_number
 
         logger.debug("[YUMAN] snapshot: %s equips", len(equips))
-        _dump("[YUMAN] snapshot equips", equips)
+        dump("[YUMAN] snapshot equips", equips)
         return equips
 
 

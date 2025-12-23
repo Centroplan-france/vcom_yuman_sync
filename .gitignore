@@ -18,4 +18,5 @@ config_local.py
 .ipynb_checkpoints/
 
 # Logs
+logs/
 *.log

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Dict, Tuple, Any
 import logging
-from vysync.app_logging import _dump
+from vysync.logging_config import dump
 from vysync.models import Site, Equipment, CAT_INVERTER, CAT_MODULE, CAT_STRING
 from vysync.inverter_parser import parse_vcom_inverter_name
 
@@ -234,6 +234,6 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
 
 
     logger.info("[VCOM] snapshot: %s sites, %s equips", len(sites), len(equips))
-    _dump("[VCOM] sites", {k: s.to_dict() for k,s in sites.items()})
-    _dump("[VCOM] equips", {k: e.to_dict() for k,e in equips.items()})
+    dump("[VCOM] sites", {k: s.to_dict() for k,s in sites.items()})
+    dump("[VCOM] equips", {k: e.to_dict() for k,e in equips.items()})
     return sites, equips

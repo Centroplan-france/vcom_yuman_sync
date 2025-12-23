@@ -45,15 +45,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sync-new-sites-report-${{ github.run_number }}
-          path: sync_new_sites_*.json
+          path: logs/reports/sync_new_sites_*.json
           retention-days: 30
 
-      - name: Upload debug logs
+      - name: Upload logs
         if: failure()  # Upload seulement en cas d'échec
         uses: actions/upload-artifact@v4
         with:
-          name: debug-logs-${{ github.run_number }}
-          path: |
-            debug_*.log
-            updates_*.log
+          name: logs-${{ github.run_number }}
+          path: logs/vysync_*.log
           retention-days: 7
