@@ -213,6 +213,9 @@ def sync_all_sites_historical(
     """
     Mode --historical : tous les sites depuis commission_date.
 
+    OPTIMISATION: Utilise les endpoints bulk pour E_Z_EVU, PR, VFG afin de
+    réduire le nombre d'appels API (~74% de réduction).
+
     Pour chaque site:
     1. Lit commission_date depuis sites_mapping
     2. Génère la liste des mois depuis commission jusqu'au mois dernier
@@ -241,6 +244,79 @@ def sync_all_sites_historical(
 
     logger.info("Sites à traiter: %d", len(sites))
 
+    # ─────────────────────────────────────────────────────────────────
+    # PHASE 1: Collecter tous les mois potentiellement nécessaires
+    # ─────────────────────────────────────────────────────────────────
+    logger.info("")
+    logger.info("Phase 1: Collecte des mois à traiter...")
+
+    all_months_needed: set[tuple[int, int]] = set()
+    now = datetime.now(timezone.utc)
+    end_year = now.year - 1  # dernière année complète
+
+    for system_key, site in sites.items():
+        if site.ignore_site or not site.commission_date:
+            continue
+
+        try:
+            commission_dt = datetime.fromisoformat(site.commission_date.replace("Z", "+00:00"))
+            start_year = commission_dt.year
+
+            for year in range(start_year, end_year + 1):
+                # Mois de démarrage selon l'année
+                if year == commission_dt.year:
+                    start_month = commission_dt.month
+                else:
+                    start_month = 1
+
+                # Mois de fin selon l'année
+                if year == end_year:
+                    end_month = now.month - 1
+                else:
+                    end_month = 12
+
+                for m in range(start_month, end_month + 1):
+                    all_months_needed.add((year, m))
+
+        except Exception as exc:
+            logger.warning("Erreur parsing commission_date pour %s: %s", system_key, exc)
+
+    if not all_months_needed:
+        logger.warning("Aucun mois à traiter")
+        return
+
+    logger.info("Mois uniques à traiter: %d (de %s à %s)",
+               len(all_months_needed),
+               min(all_months_needed),
+               max(all_months_needed))
+
+    # ─────────────────────────────────────────────────────────────────
+    # PHASE 2: Récupérer les données bulk pour tous les mois
+    # (E_Z_EVU, PR, VFG pour TOUS les sites en 3 appels par mois)
+    # ─────────────────────────────────────────────────────────────────
+    logger.info("")
+    logger.info("Phase 2: Récupération bulk des métriques (E_Z_EVU, PR, VFG)...")
+
+    bulk_cache: dict[tuple[int, int], dict[str, dict[str, float | None]]] = {}
+
+    for idx, (year, month) in enumerate(sorted(all_months_needed), 1):
+        try:
+            logger.debug("[%d/%d] Fetch bulk pour %d-%02d",
+                        idx, len(all_months_needed), year, month)
+            bulk_data = vcom_analytics.fetch_bulk_metrics(vc, year, month)
+            bulk_cache[(year, month)] = bulk_data
+        except Exception as exc:
+            logger.warning("Erreur bulk %d-%02d: %s", year, month, exc)
+            bulk_cache[(year, month)] = {}
+
+    logger.info("Bulk terminé: %d mois récupérés", len(bulk_cache))
+
+    # ─────────────────────────────────────────────────────────────────
+    # PHASE 3: Traiter chaque site avec les données bulk
+    # ─────────────────────────────────────────────────────────────────
+    logger.info("")
+    logger.info("Phase 3: Synchronisation des sites...")
+
     processed = 0
     skipped = 0
 
@@ -268,7 +344,6 @@ def sync_all_sites_historical(
             # Générer la liste des années (pas des mois)
             commission_dt = datetime.fromisoformat(site.commission_date.replace("Z", "+00:00"))
             start_year = commission_dt.year
-            end_year = datetime.now(timezone.utc).year - 1  # dernière année complète
 
             success_count = 0
             skipped_count = 0
@@ -293,7 +368,7 @@ def sync_all_sites_historical(
 
                 if year == end_year:
                     # Si dernière année = on s'arrête au mois dernier
-                    end_month = datetime.now(timezone.utc).month - 1
+                    end_month = now.month - 1
                 else:
                     end_month = 12
 
@@ -302,8 +377,12 @@ def sync_all_sites_historical(
                     logger.info("Aucun mois valide à traiter pour %d", year)
                     continue
 
-                # Synchroniser l'année
-                sync_site_analytics(vc, sb, system_key, site.id, months, meter_id=meter_id)
+                # Synchroniser l'année (avec bulk_cache)
+                sync_site_analytics(
+                    vc, sb, system_key, site.id, months,
+                    meter_id=meter_id,
+                    bulk_cache=bulk_cache
+                )
                 success_count += len(months)
 
             logger.info("✓ %s: %d mois traités, %d mois skipped",
