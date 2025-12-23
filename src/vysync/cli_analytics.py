@@ -149,7 +149,8 @@ def sync_site_analytics(
     system_key: str,
     site_id: int,
     months: List[Tuple[int, int]],
-    meter_id: str | None = None
+    meter_id: str | None = None,
+    bulk_cache: dict | None = None
 ) -> None:
     """
     Synchronise les analytics d'un site pour une liste de mois.
@@ -161,10 +162,12 @@ def sync_site_analytics(
         site_id: ID du site dans sites_mapping
         months: Liste de tuples (year, month), ex: [(2024, 12), (2025, 1)]
         meter_id: ID du meter (optionnel, évite appels API répétés)
+        bulk_cache: Dict indexé par (year, month) contenant les données bulk pré-récupérées.
+                    Structure: {(2024, 12): {"SYSTEM_KEY": {"E_Z_EVU": ..., "PR": ..., "VFG": ...}}}
     """
     logger.info("-" * 70)
-    logger.info("Synchronisation analytics pour %s (site_id=%d) - %d mois",
-               system_key, site_id, len(months))
+    logger.info("Synchronisation analytics pour %s (site_id=%d) - %d mois%s",
+               system_key, site_id, len(months), " (bulk)" if bulk_cache else "")
 
     success_count = 0
     error_count = 0
@@ -174,9 +177,15 @@ def sync_site_analytics(
                     idx, len(months), system_key, year, month)
 
         try:
+            # Récupérer les données bulk pour ce mois si disponibles
+            bulk_data = None
+            if bulk_cache:
+                month_bulk = bulk_cache.get((year, month), {})
+                bulk_data = month_bulk.get(system_key)
+
             # Récupérer les analytics du mois
             analytics = vcom_analytics.fetch_monthly_analytics(
-                vc, system_key, year, month, meter_id=meter_id
+                vc, system_key, year, month, meter_id=meter_id, bulk_data=bulk_data
             )
 
             # Formater la date au format YYYY-MM-01
@@ -353,6 +362,17 @@ def sync_all_sites_last_month(
 
     logger.info("Sites à traiter: %d", len(sites))
 
+    # ─────────────────────────────────────────────────────────────────
+    # OPTIMISATION BULK : récupérer E_Z_EVU, PR, VFG pour TOUS les sites
+    # en 3 appels API au lieu de N×3 appels
+    # ─────────────────────────────────────────────────────────────────
+    logger.info("")
+    logger.info("Récupération bulk des métriques (E_Z_EVU, PR, VFG)...")
+    bulk_data = vcom_analytics.fetch_bulk_metrics(vc, last_month_year, last_month)
+    bulk_cache = {(last_month_year, last_month): bulk_data}
+    logger.info("Bulk terminé: %d systèmes avec données", len(bulk_data))
+    logger.info("")
+
     processed = 0
     skipped = 0
 
@@ -390,9 +410,13 @@ def sync_all_sites_last_month(
         meter_id = vcom_analytics.get_or_fetch_meter_id(vc, sb, system_key, site.id)
 
         try:
-            # Synchroniser uniquement le mois dernier
+            # Synchroniser uniquement le mois dernier (avec bulk_cache)
             months = [(last_month_year, last_month)]
-            sync_site_analytics(vc, sb, system_key, site.id, months, meter_id=meter_id)
+            sync_site_analytics(
+                vc, sb, system_key, site.id, months,
+                meter_id=meter_id,
+                bulk_cache=bulk_cache
+            )
             processed += 1
 
         except Exception as exc:

@@ -404,14 +404,20 @@ class VCOMAPIClient:
         """
         Récupère les mesures d'une abréviation pour TOUS les systèmes (bulk).
 
+        Utilise l'endpoint cross-sites : GET /systems/abbreviations/{abbrev}/measurements
+
         Args:
-            abbreviation_id: ID de l'abréviation (E_Z_EVU, G_M0, PR, VFG)
+            abbreviation_id: ID de l'abréviation (E_Z_EVU, PR, VFG uniquement)
             from_date: Date de début ISO (ex: "2025-01-01T00:00:00+01:00")
             to_date: Date de fin ISO (ex: "2025-10-31T23:59:59+01:00")
             resolution: Résolution (day, month, year). Défaut: month
 
         Returns:
             Liste de dicts: [{"systemKey": "ABCDE", "<abbrev>": [{"timestamp": ..., "value": ...}]}, ...]
+
+        Note:
+            ⚠️ G_M0 n'est PAS supporté par cet endpoint (retourne HTTP 404).
+            Pour G_M0, utiliser l'endpoint par site : /systems/{key}/basics/abbreviations/G_M0/measurements
         """
         params = {
             "from": from_date,

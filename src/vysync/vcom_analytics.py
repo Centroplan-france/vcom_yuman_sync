@@ -105,6 +105,77 @@ def _calculate_delta(measurements: List[Dict[str, Any]]) -> float | None:
         return None
 
 
+# ────────────────────────── Bulk Fetchers ────────────────────────────
+
+
+def fetch_bulk_metrics(
+    vc: VCOMAPIClient,
+    year: int,
+    month: int
+) -> Dict[str, Dict[str, float | None]]:
+    """
+    Récupère E_Z_EVU, PR, VFG pour TOUS les sites en 3 appels bulk.
+
+    Utilise l'endpoint cross-sites `/systems/abbreviations/{abbrev}/measurements`
+    qui retourne les données de tous les systèmes en un seul appel.
+
+    ⚠️ G_M0 n'est PAS inclus car l'endpoint bulk retourne 404 pour cette abréviation.
+    G_M0 doit être récupéré par site via fetch_monthly_basics().
+
+    Args:
+        vc: Client VCOM API
+        year: Année (ex: 2024)
+        month: Mois (1-12)
+
+    Returns:
+        Dict[system_key, {
+            "E_Z_EVU": float | None,
+            "PR": float | None,
+            "VFG": float | None
+        }]
+
+    Exemple:
+        >>> bulk = fetch_bulk_metrics(vc, 2024, 12)
+        >>> bulk["E3K2L"]
+        {"E_Z_EVU": 12345.67, "PR": 82.5, "VFG": 99.1}
+    """
+    from_date, to_date = _build_month_dates(year, month)
+    result: Dict[str, Dict[str, float | None]] = {}
+
+    # Abréviations supportées par l'endpoint bulk (PAS G_M0 qui retourne 404)
+    bulk_abbreviations = ["E_Z_EVU", "PR", "VFG"]
+
+    for abbrev in bulk_abbreviations:
+        try:
+            logger.debug("Fetch bulk %s pour %d-%02d", abbrev, year, month)
+            data = vc.get_bulk_measurements(abbrev, from_date, to_date, resolution="month")
+
+            # Structure: [{"systemKey": "ABCDE", "<abbrev>": [{"timestamp": ..., "value": ...}]}, ...]
+            for item in data:
+                system_key = item.get("systemKey")
+                if not system_key:
+                    continue
+
+                # Initialiser le dict pour ce système si nécessaire
+                if system_key not in result:
+                    result[system_key] = {"E_Z_EVU": None, "PR": None, "VFG": None}
+
+                # Extraire la valeur mensuelle
+                measurements = item.get(abbrev, [])
+                value = _extract_single_value(measurements)
+                result[system_key][abbrev] = value
+
+            logger.info("Bulk %s: %d systèmes récupérés pour %d-%02d",
+                       abbrev, len([k for k in result if result[k].get(abbrev) is not None]),
+                       year, month)
+
+        except Exception as exc:
+            logger.warning("Erreur fetch bulk %s pour %d-%02d: %s", abbrev, year, month, exc)
+
+    logger.info("Bulk total: %d systèmes avec données pour %d-%02d", len(result), year, month)
+    return result
+
+
 # ────────────────────────── API Fetchers ────────────────────────────
 
 
@@ -406,7 +477,8 @@ def fetch_monthly_analytics(
     system_key: str,
     year: int,
     month: int,
-    meter_id: str | None = None
+    meter_id: str | None = None,
+    bulk_data: Dict[str, float | None] | None = None
 ) -> Dict[str, Any]:
     """
     Agrège toutes les données analytics pour un site et un mois.
@@ -422,6 +494,9 @@ def fetch_monthly_analytics(
         year: Année
         month: Mois (1-12)
         meter_id: ID du meter (optionnel, évite un appel API si fourni)
+        bulk_data: Données pré-récupérées via fetch_bulk_metrics() (optionnel).
+                   Si fourni, évite les appels API pour E_Z_EVU, PR, VFG.
+                   Structure: {"E_Z_EVU": float, "PR": float, "VFG": float}
 
     Returns:
         Dictionnaire avec toutes les métriques du mois:
@@ -436,7 +511,8 @@ def fetch_monthly_analytics(
             "has_meter_data": bool
         }
     """
-    logger.info("Récupération analytics pour %s %d-%02d", system_key, year, month)
+    logger.info("Récupération analytics pour %s %d-%02d%s",
+                system_key, year, month, " (avec bulk)" if bulk_data else "")
 
     # Initialiser le résultat
     analytics = {
@@ -450,15 +526,43 @@ def fetch_monthly_analytics(
         "has_meter_data": False
     }
 
-    # 1. Récupérer BASICS
-    basics = fetch_monthly_basics(vc, system_key, year, month)
-    analytics["production_kwh"] = basics.get("E_Z_EVU")
-    analytics["irradiance_avg"] = basics.get("G_M0")
+    # ─────────────────────────────────────────────────────────────────
+    # Mode BULK : utiliser les données pré-récupérées pour E_Z_EVU, PR, VFG
+    # ─────────────────────────────────────────────────────────────────
+    if bulk_data:
+        # Utiliser les données bulk pour production, PR, VFG
+        analytics["production_kwh"] = bulk_data.get("E_Z_EVU")
+        analytics["performance_ratio"] = bulk_data.get("PR")
+        analytics["availability"] = bulk_data.get("VFG")
 
-    # 2. Récupérer CALCULATIONS
-    calculations = fetch_monthly_calculations(vc, system_key, year, month)
-    analytics["performance_ratio"] = calculations.get("PR")
-    analytics["availability"] = calculations.get("VFG")
+        # G_M0 n'est PAS dans bulk (retourne 404) → appel API individuel
+        try:
+            from_date, to_date = _build_month_dates(year, month)
+            endpoint = f"/systems/{system_key}/basics/abbreviations/G_M0/measurements"
+            params = {"from": from_date, "to": to_date, "resolution": "month"}
+            response = vc._make_request("GET", endpoint, params=params)
+            data = response.json().get("data", {})
+            measurements = data.get("G_M0", [])
+            analytics["irradiance_avg"] = _extract_single_value(measurements)
+            logger.debug("G_M0 pour %s %d-%02d: %s", system_key, year, month,
+                        analytics["irradiance_avg"])
+        except Exception as exc:
+            logger.warning("Erreur récupération G_M0 pour %s %d-%02d: %s",
+                          system_key, year, month, exc)
+
+    # ─────────────────────────────────────────────────────────────────
+    # Mode CLASSIQUE : appels API individuels pour tout
+    # ─────────────────────────────────────────────────────────────────
+    else:
+        # 1. Récupérer BASICS (E_Z_EVU + G_M0)
+        basics = fetch_monthly_basics(vc, system_key, year, month)
+        analytics["production_kwh"] = basics.get("E_Z_EVU")
+        analytics["irradiance_avg"] = basics.get("G_M0")
+
+        # 2. Récupérer CALCULATIONS (PR + VFG)
+        calculations = fetch_monthly_calculations(vc, system_key, year, month)
+        analytics["performance_ratio"] = calculations.get("PR")
+        analytics["availability"] = calculations.get("VFG")
 
     # 3. Récupérer METERS si disponible (utiliser meter_id fourni)
     if meter_id:
