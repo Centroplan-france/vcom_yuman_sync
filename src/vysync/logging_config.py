@@ -2,20 +2,28 @@
 """
 Configuration centralisée du logging pour vysync.
 
-Stratégie :
-- Console (stdout) : niveau INFO, format court
-- debug.log : niveau DEBUG, tout
-- updates.log : logger dédié aux updates d'équipements
-- Nettoyage automatique des logs de plus de 7 jours au démarrage
-
-Structure des logs :
+Structure :
     logs/
-    ├── debug_YYYYMMDD_HHMMSS.log
-    ├── updates_YYYYMMDD_HHMMSS.log
+    ├── vysync_YYYYMMDD_HHMMSS.log   # Log principal (INFO par défaut)
     └── reports/
-        └── *.json
+        └── *.json                    # Rapports JSON
+
+Niveaux :
+    - Console : INFO (messages importants)
+    - Fichier : INFO par défaut, DEBUG si LOG_LEVEL=DEBUG
+
+Usage :
+    # Mode normal (INFO)
+    poetry run python -m vysync.cli sync
+
+    # Mode debug (verbose)
+    LOG_LEVEL=DEBUG poetry run python -m vysync.cli sync
+
+Nettoyage automatique des fichiers > 7 jours au démarrage.
 """
 
+import os
+import json
 import logging
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -24,70 +32,40 @@ from datetime import datetime, timedelta
 # CONFIGURATION
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Dossiers logs à la racine du projet
 LOGS_DIR = Path(__file__).parent.parent.parent / "logs"
 REPORTS_DIR = LOGS_DIR / "reports"
-
-# Durée de rétention des logs (en jours)
 LOG_RETENTION_DAYS = 7
 
-# Format pour la console (court et lisible)
+# Niveau par défaut, modifiable via LOG_LEVEL=DEBUG
+DEFAULT_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+
+# Formats
 CONSOLE_FORMAT = "%(levelname)s | %(message)s"
-
-# Format pour les fichiers (détaillé)
-FILE_FORMAT = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
+FILE_FORMAT = "%(asctime)s | %(levelname)s | %(message)s"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# NETTOYAGE DES ANCIENS LOGS
+# NETTOYAGE AUTOMATIQUE
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def cleanup_old_logs(directory: Path, pattern: str = "*", days: int = LOG_RETENTION_DAYS) -> int:
-    """
-    Supprime les fichiers correspondant au pattern plus anciens que `days` jours.
-
-    Args:
-        directory: Dossier à nettoyer
-        pattern: Glob pattern des fichiers à considérer (ex: "debug_*.log")
-        days: Âge maximum en jours (défaut: LOG_RETENTION_DAYS)
-
-    Returns:
-        Nombre de fichiers supprimés
-    """
+def _cleanup_old_files(directory: Path, pattern: str, days: int = LOG_RETENTION_DAYS) -> int:
+    """Supprime les fichiers correspondant au pattern plus anciens que `days` jours."""
     if not directory.exists():
         return 0
 
     cutoff = datetime.now() - timedelta(days=days)
     deleted = 0
 
-    for file_path in directory.glob(pattern):
-        if file_path.is_file():
-            # Utilise la date de modification du fichier
-            mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
-            if mtime < cutoff:
-                try:
-                    file_path.unlink()
-                    deleted += 1
-                except OSError:
-                    pass  # Ignore les erreurs de suppression
+    for f in directory.glob(pattern):
+        if f.is_file() and datetime.fromtimestamp(f.stat().st_mtime) < cutoff:
+            try:
+                f.unlink()
+                deleted += 1
+            except OSError:
+                pass
 
     return deleted
-
-
-def cleanup_all_old_logs() -> dict[str, int]:
-    """
-    Nettoie tous les anciens logs (debug, updates, reports).
-
-    Returns:
-        Dictionnaire avec le nombre de fichiers supprimés par catégorie
-    """
-    results = {
-        "debug_logs": cleanup_old_logs(LOGS_DIR, "debug_*.log"),
-        "updates_logs": cleanup_old_logs(LOGS_DIR, "updates_*.log"),
-        "reports": cleanup_old_logs(REPORTS_DIR, "*.json"),
-    }
-    return results
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -95,80 +73,80 @@ def cleanup_all_old_logs() -> dict[str, int]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def setup_logging() -> logging.Logger:
+def setup_logging() -> None:
     """
-    Configure le système de logging global.
+    Configure le système de logging.
 
-    Actions :
-    1. Crée les dossiers logs/ et logs/reports/ si nécessaire
-    2. Nettoie les logs de plus de 7 jours
-    3. Configure les handlers (console, debug.log, updates.log)
-
-    Returns:
-        Logger dédié aux updates d'équipements
+    - Crée logs/ et logs/reports/
+    - Nettoie les fichiers > 7 jours
+    - Configure console (INFO) et fichier (INFO ou DEBUG selon LOG_LEVEL)
     """
-    # Création des dossiers
     LOGS_DIR.mkdir(exist_ok=True)
     REPORTS_DIR.mkdir(exist_ok=True)
 
-    # Nettoyage des anciens logs
-    cleanup_results = cleanup_all_old_logs()
-    total_cleaned = sum(cleanup_results.values())
+    # Nettoyage
+    cleaned = _cleanup_old_files(LOGS_DIR, "vysync_*.log")
+    cleaned += _cleanup_old_files(REPORTS_DIR, "*.json")
 
-    # Root logger à DEBUG (capture tout)
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG)
+    # Niveau effectif
+    level = getattr(logging, DEFAULT_LEVEL, logging.INFO)
 
-    # Supprimer les handlers existants (évite les doublons)
-    root_logger.handlers.clear()
+    # Root logger
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)  # Capture tout, filtrage par handlers
+    root.handlers.clear()
 
-    # ── Réduire le bruit des bibliothèques tierces ──
+    # Réduire le bruit des libs tierces
     for lib in ("hpack", "httpcore", "httpx", "urllib3", "asyncio"):
         logging.getLogger(lib).setLevel(logging.WARNING)
 
-    # ── Handler 1 : Console (INFO uniquement) ──
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(logging.Formatter(CONSOLE_FORMAT))
-    root_logger.addHandler(console_handler)
+    # Handler console (toujours INFO)
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    console.setFormatter(logging.Formatter(CONSOLE_FORMAT))
+    root.addHandler(console)
 
-    # ── Handler 2 : Fichier debug.log (DEBUG complet) ──
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    debug_file = LOGS_DIR / f"debug_{timestamp}.log"
-    debug_handler = logging.FileHandler(debug_file, encoding='utf-8')
-    debug_handler.setLevel(logging.DEBUG)
-    debug_handler.setFormatter(logging.Formatter(FILE_FORMAT))
-    root_logger.addHandler(debug_handler)
+    # Handler fichier (INFO ou DEBUG selon env)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = LOGS_DIR / f"vysync_{timestamp}.log"
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setLevel(level)
+    file_handler.setFormatter(logging.Formatter(FILE_FORMAT))
+    root.addHandler(file_handler)
 
-    # ── Logger dédié : updates.log (équipements uniquement) ──
-    updates_logger = logging.getLogger("vysync.updates")
-    updates_logger.setLevel(logging.DEBUG)
-    updates_logger.propagate = False  # Ne pas propager au root logger
-
-    updates_file = LOGS_DIR / f"updates_{timestamp}.log"
-    updates_handler = logging.FileHandler(updates_file, encoding='utf-8')
-    updates_handler.setLevel(logging.DEBUG)
-    updates_handler.setFormatter(logging.Formatter(FILE_FORMAT))
-    updates_logger.addHandler(updates_handler)
-
-    # Log de confirmation
-    cleanup_msg = f", {total_cleaned} ancien(s) log(s) supprimé(s)" if total_cleaned else ""
-    logging.info(f"Logs initialisés : debug={debug_file.name}, updates={updates_file.name}{cleanup_msg}")
-
-    return updates_logger
-
-
-def get_updates_logger() -> logging.Logger:
-    """Retourne le logger dédié aux updates d'équipements."""
-    return logging.getLogger("vysync.updates")
+    # Message de confirmation
+    mode = "DEBUG" if level == logging.DEBUG else "INFO"
+    clean_msg = f", {cleaned} ancien(s) supprimé(s)" if cleaned else ""
+    logging.info(f"Logs: {log_file.name} (mode={mode}{clean_msg})")
 
 
 def get_reports_dir() -> Path:
-    """
-    Retourne le dossier des rapports, en le créant si nécessaire.
-
-    Returns:
-        Path vers logs/reports/
-    """
+    """Retourne le dossier des rapports, en le créant si nécessaire."""
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     return REPORTS_DIR
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HELPER DEBUG
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def dump(label: str, obj, *, logger: logging.Logger | None = None) -> None:
+    """
+    Affiche un objet en JSON formaté au niveau DEBUG.
+
+    Ne fait rien si DEBUG n'est pas activé (zéro overhead en prod).
+
+    Args:
+        label: Description de l'objet
+        obj: Objet à sérialiser (dict, list, etc.)
+        logger: Logger à utiliser (défaut: root logger)
+
+    Exemple:
+        dump("Réponse API", response_data)
+        dump("Config site", site_config, logger=my_logger)
+    """
+    log = logger or logging.getLogger()
+    if not log.isEnabledFor(logging.DEBUG):
+        return
+    log.debug("%s\n%s", label, json.dumps(obj, default=str, indent=2))

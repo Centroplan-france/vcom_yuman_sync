@@ -30,7 +30,7 @@ Modes disponibles :
 import argparse
 import logging
 
-from vysync.app_logging import _dump
+from vysync.logging_config import dump
 from vysync.adapters.vcom_adapter import fetch_snapshot
 from vysync.adapters.supabase_adapter import SupabaseAdapter
 from vysync.adapters.yuman_adapter import YumanAdapter
