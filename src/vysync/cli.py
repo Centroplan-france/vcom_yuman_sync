@@ -121,29 +121,16 @@ def cmd_auto_merge(args: argparse.Namespace) -> int:
     logger.info("COMMANDE: auto-merge (Fusion automatique VCOM/Yuman)")
     logger.info("=" * 70)
 
-    # Injection des arguments pour auto_merge
-    import sys
-    original_argv = sys.argv
-
-    sys_args = ["auto_merge_sites"]
-    if args.execute:
-        sys_args.append("--execute")
-    if args.dry_run:
-        pass  # dry-run est le défaut
-    if hasattr(args, 'test_email') and args.test_email:
-        sys_args.append("--test-email")
-
-    sys.argv = sys_args
+    from vysync.auto_merge_sites import run_auto_merge
 
     try:
-        from vysync.auto_merge_sites import main as auto_merge_main
-        result = auto_merge_main()
-        return result if result is not None else 0
+        return run_auto_merge(
+            execute=args.execute,
+            test_email=getattr(args, 'test_email', False)
+        )
     except Exception as e:
         logger.error("Erreur: %s", e, exc_info=True)
         return 1
-    finally:
-        sys.argv = original_argv
 
 
 def cmd_db_to_yuman(args: argparse.Namespace) -> int:
@@ -193,25 +180,13 @@ def cmd_tickets(args: argparse.Namespace) -> int:
     logger.info("COMMANDE: tickets (Sync tickets VCOM ↔ workorders Yuman)")
     logger.info("=" * 70)
 
-    # Injection des arguments
-    import sys
-    original_argv = sys.argv
-
-    sys_args = ["sync_tickets_workorders"]
-    if args.dry_run:
-        sys_args.append("--dry-run")
-
-    sys.argv = sys_args
+    from vysync.sync_tickets_workorders import run_tickets_sync
 
     try:
-        from vysync.sync_tickets_workorders import main as tickets_main
-        tickets_main()
-        return 0
+        return run_tickets_sync(dry_run=args.dry_run)
     except Exception as e:
         logger.error("Erreur: %s", e, exc_info=True)
         return 1
-    finally:
-        sys.argv = original_argv
 
 
 def cmd_ppc(args: argparse.Namespace) -> int:
@@ -536,9 +511,9 @@ Exemples:
     mode_group.add_argument(
         "--last-month",
         action="store_true",
-        default=True,
         help="Sync uniquement le mois dernier (défaut)"
     )
+    p_analytics.set_defaults(last_month=True)
     p_analytics.add_argument(
         "--site-key",
         type=str,

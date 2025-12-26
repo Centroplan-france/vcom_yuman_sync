@@ -447,58 +447,61 @@ def generate_report(vcom_only: List[SiteInfo],
 # MAIN
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Automatise les fusions de sites VCOM ↔ Yuman"
-    )
-    parser.add_argument("--execute", action="store_true",
-                        help="Exécuter réellement les fusions (sinon dry-run)")
-    parser.add_argument("--test-email", action="store_true",
-                        help="Envoyer l'email même en dry-run (pour tester)")
-    parser.add_argument("--output", type=str, default=OUTPUT_FILE,
-                        help=f"Fichier de rapport JSON (défaut: {OUTPUT_FILE})")
-    
-    args = parser.parse_args()
-    
+def run_auto_merge(
+    execute: bool = False,
+    test_email: bool = False,
+    output: str = OUTPUT_FILE
+) -> int:
+    """
+    Logique métier de fusion automatique des sites VCOM ↔ Yuman.
+
+    Args:
+        execute: Si True, exécute réellement les fusions (sinon dry-run)
+        test_email: Si True, envoie l'email même en dry-run
+        output: Chemin du fichier de rapport JSON
+
+    Returns:
+        0 en cas de succès, 1 en cas d'erreur
+    """
     # Vérifier les variables d'environnement
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_SERVICE_KEY")
-    
+
     if not url or not key:
         logger.error("Variables d'environnement SUPABASE_URL et SUPABASE_SERVICE_KEY manquantes")
         return 1
-    
+
     logger.info("=" * 70)
     logger.info("AUTO MERGE SITES - Fusion automatique VCOM ↔ Yuman")
     logger.info("=" * 70)
-    
-    if not args.execute:
+
+    if not execute:
         logger.info("MODE DRY-RUN - Aucune modification ne sera effectuée")
-    
+
     # Connexion
     logger.info("Connexion à Supabase...")
     sb = create_client(url, key)
-    
+
     # 1. Récupérer les sites
     logger.info("Récupération des sites...")
     vcom_only, yuman_only, complete = fetch_sites(sb)
-    
+
     vcom_active = [v for v in vcom_only if not v.ignore_site]
     logger.info(f"  Sites complets: {len(complete)}")
     logger.info(f"  Sites VCOM-only actifs: {len(vcom_active)}")
     logger.info(f"  Sites Yuman-only: {len(yuman_only)}")
-    
+
     # 2. Trouver les paires
     logger.info("Recherche des paires potentielles...")
     matches = find_potential_matches(vcom_only, yuman_only)
-    
+
     # Filtrer par confiance
     matches_to_merge = [m for m in matches if m.confidence in CONFIDENCE_TO_MERGE]
     matches_low = [m for m in matches if m.confidence not in CONFIDENCE_TO_MERGE]
-    
+
     logger.info(f"  Paires HIGH/MEDIUM (à fusionner): {len(matches_to_merge)}")
     logger.info(f"  Paires LOW (ignorées): {len(matches_low)}")
-    
+
     # Afficher les paires à fusionner
     if matches_to_merge:
         logger.info("")
@@ -509,61 +512,61 @@ def main():
                        f"← Yuman {m.yuman_site.id} (yuman_id={m.yuman_site.yuman_site_id}, {y_status})")
             logger.info(f"           {m.vcom_site.name[:50]}")
             logger.info(f"           {m.yuman_site.name[:50]}")
-    
+
     # 3. Identifier les sites VCOM sans paire
     matched_vcom_ids = {m.vcom_site.id for m in matches}
     unmatched_vcom = [v for v in vcom_active if v.id not in matched_vcom_ids]
-    
+
     if unmatched_vcom:
         logger.warning("")
         logger.warning(f"⚠️  {len(unmatched_vcom)} site(s) VCOM actifs SANS PAIRE:")
         for s in unmatched_vcom:
             logger.warning(f"  [{s.id}] {s.vcom_system_key}: {s.name}")
-    
+
     # 4. Exécuter les fusions
     merge_results: List[MergeResult] = []
-    
-    if args.execute and matches_to_merge:
+
+    if execute and matches_to_merge:
         logger.info("")
         logger.info("=" * 70)
         logger.info("EXÉCUTION DES FUSIONS")
         logger.info("=" * 70)
-        
+
         for i, m in enumerate(matches_to_merge, 1):
             logger.info(f"[{i}/{len(matches_to_merge)}] Fusion VCOM {m.vcom_site.id} ← Yuman {m.yuman_site.id}...")
             result = merge_single_pair(sb, m.vcom_site.id, m.yuman_site.id, m.yuman_site.yuman_site_id)
             merge_results.append(result)
-            
+
             if result.success:
                 logger.info(f"         ✅ OK")
             else:
                 logger.error(f"         ❌ ERREUR: {result.error}")
-    
+
     # 5. Résumé
     logger.info("")
     logger.info("=" * 70)
     logger.info("RÉSUMÉ")
     logger.info("=" * 70)
-    
-    if args.execute:
+
+    if execute:
         successful = [r for r in merge_results if r.success]
         failed = [r for r in merge_results if not r.success]
         logger.info(f"  Fusions réussies: {len(successful)}")
         logger.info(f"  Fusions échouées: {len(failed)}")
     else:
         logger.info(f"  Fusions prévues: {len(matches_to_merge)}")
-    
+
     logger.info(f"  Sites VCOM sans paire: {len(unmatched_vcom)}")
-    
+
     # 6. Envoi d'email si nécessaire
     failed_merges = [r for r in merge_results if not r.success]
-    should_send_email = (unmatched_vcom or failed_merges) and (args.execute or args.test_email)
-    
+    should_send_email = (unmatched_vcom or failed_merges) and (execute or test_email)
+
     if should_send_email:
         logger.info("")
         logger.info("Envoi de l'email d'alerte...")
         send_alert_email(unmatched_vcom, merge_results, failed_merges)
-    
+
     # 7. Générer le rapport
     report = generate_report(
         vcom_only=vcom_only,
@@ -571,25 +574,46 @@ def main():
         matches=matches,
         merge_results=merge_results,
         unmatched_vcom=unmatched_vcom,
-        dry_run=not args.execute,
+        dry_run=not execute,
     )
-    
-    with open(args.output, "w", encoding="utf-8") as f:
+
+    with open(output, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
-    
+
     logger.info(f"")
-    logger.info(f"📄 Rapport exporté: {args.output}")
-    
-    if not args.execute:
+    logger.info(f"📄 Rapport exporté: {output}")
+
+    if not execute:
         logger.info("")
         logger.info("-" * 70)
         logger.info("MODE DRY-RUN - Pour exécuter réellement, ajouter --execute")
         logger.info("-" * 70)
-    
+
     # Code de retour
     if failed_merges:
         return 1  # Erreur si des fusions ont échoué
     return 0
+
+
+def main() -> int:
+    """Point d'entrée CLI pour le script standalone."""
+    parser = argparse.ArgumentParser(
+        description="Automatise les fusions de sites VCOM ↔ Yuman"
+    )
+    parser.add_argument("--execute", action="store_true",
+                        help="Exécuter réellement les fusions (sinon dry-run)")
+    parser.add_argument("--test-email", action="store_true",
+                        help="Envoyer l'email même en dry-run (pour tester)")
+    parser.add_argument("--output", type=str, default=OUTPUT_FILE,
+                        help=f"Fichier de rapport JSON (défaut: {OUTPUT_FILE})")
+
+    args = parser.parse_args()
+
+    return run_auto_merge(
+        execute=args.execute,
+        test_email=args.test_email,
+        output=args.output
+    )
 
 
 if __name__ == "__main__":
