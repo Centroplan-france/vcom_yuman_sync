@@ -424,10 +424,16 @@ def close_tickets_of_closed_workorders(sb, vc, yc, *, dry: bool = False) -> None
 # ---------------------------------------------------------------------------
 # Orchestrateur principal
 
-def main() -> None:
-    args = parse_args()
-    dry = args.dry_run
+def run_tickets_sync(dry_run: bool = False) -> int:
+    """
+    Logique métier de synchronisation tickets VCOM ↔ workorders Yuman.
 
+    Args:
+        dry_run: Si True, pas d'écriture ni update sur les APIs/BD
+
+    Returns:
+        0 en cas de succès, 1 en cas d'erreur
+    """
     # Connexions externes
     sb = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
     vc = VCOMAPIClient()
@@ -438,16 +444,24 @@ def main() -> None:
     workorders = collect_yuman_workorders(yc)
 
     # 2. DB sync
-    sync_tickets_to_db(sb, tickets, dry=dry)
-    sync_workorders_to_db(sb, workorders, dry=dry)
+    sync_tickets_to_db(sb, tickets, dry=dry_run)
+    sync_workorders_to_db(sb, workorders, dry=dry_run)
 
     # 3‑5. Règles métier
-    assign_tickets_to_active_workorders(sb, vc, yc, workorders, dry=dry)
-    create_workorders_for_priority_sites(sb, vc, yc, tickets, workorders, dry=dry)
-    close_tickets_of_closed_workorders(sb, vc, yc, dry=dry)
+    assign_tickets_to_active_workorders(sb, vc, yc, workorders, dry=dry_run)
+    create_workorders_for_priority_sites(sb, vc, yc, tickets, workorders, dry=dry_run)
+    close_tickets_of_closed_workorders(sb, vc, yc, dry=dry_run)
 
     logger.info("✅ Synchronisation terminée")
+    return 0
+
+
+def main() -> int:
+    """Point d'entrée CLI pour le script standalone."""
+    args = parse_args()
+    return run_tickets_sync(dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(main())
