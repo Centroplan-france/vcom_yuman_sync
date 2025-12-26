@@ -91,7 +91,7 @@ def fetch_snapshot(vc, vcom_system_key: str | None = None, skip_keys: set[str] |
 
         # -------------------------------------------------------------------------
         # PLANT (category_id = 11441), eq_type = "plant"
-        plant_sn = f"central-{key}"            # demandé : "Centrale-<vcom_system_key>"
+        plant_sn = f"CENTRAL-{key}"            # demandé : "Centrale-<vcom_system_key>"
         plant_eq = Equipment(
             site_id         = site_id,
             category_id     = 11441,            # PLANT

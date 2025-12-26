@@ -354,7 +354,7 @@ class YumanAdapter:
                 .update({"yuman_site_id": new_site["id"]}) \
                 .eq("vcom_system_key", vcom_key) \
                 .execute()
-            self._ensure_centrale(new_site["id"])
+            
 
         # 3) UPDATE
         for old, new in patch.update:
@@ -421,21 +421,6 @@ class YumanAdapter:
                     .update({"yuman_site_id": old_yuman_id}) \
                     .eq("vcom_system_key", new_vcom_key) \
                     .execute()
-
-    # ------------------------------------------------------------------
-    #  Équipement “Centrale”                                             #
-    # ------------------------------------------------------------------
-    def _ensure_centrale(self, yuman_site_id: int) -> None:
-        if any(m["id"] for m in self.yc.list_materials(
-                category_id=CAT_CENTRALE, embed=None)
-                if m["site_id"] == yuman_site_id):
-            return                       # déjà présent
-        self.yc.create_material({
-            "site_id":     yuman_site_id,
-            "name":        "Centrale",
-            "category_id": CAT_CENTRALE,
-            "serial_number" : f"Centrale-{yuman_site_id}"
-        })
 
 
     # ------------------------------------------------------------------ #
