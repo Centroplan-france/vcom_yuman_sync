@@ -1,0 +1,57 @@
+name: Sync VCOM Updates Weekly
+
+on:
+  # Déclenchement hebdomadaire le dimanche à 11h UTC
+  schedule:
+    - cron: '0 11 * * 0'
+  
+  # Déclenchement manuel via l'interface GitHub
+  workflow_dispatch:
+
+jobs:
+  sync-vcom-updates:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        run: |
+          pip install poetry
+          poetry config virtualenvs.create false
+
+      - name: Install dependencies
+        run: poetry install
+
+      - name: Run sync VCOM updates
+        env:
+          VCOM_API_KEY: ${{ secrets.VCOM_API_KEY }}
+          VCOM_USERNAME: ${{ secrets.VCOM_USERNAME }}
+          VCOM_PASSWORD: ${{ secrets.VCOM_PASSWORD }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          LOG_LEVEL: INFO
+        run: |
+          poetry run python -m vysync.sync_vcom_updates
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-vcom-updates-report-${{ github.run_number }}
+          path: logs/reports/sync_vcom_updates_*.json
+          retention-days: 30
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ github.run_number }}
+          path: logs/vysync_*.log
+          retention-days: 7

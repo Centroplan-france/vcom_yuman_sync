@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional, Set
 from vysync.adapters.supabase_adapter import SupabaseAdapter
 from vysync.adapters.vcom_adapter import fetch_snapshot
 from vysync.diff import PatchSet, diff_entities
-from vysync.logging_config import setup_logging
+from vysync.logging_config import setup_logging, get_reports_dir
 from vysync.models import CAT_CENTRALE, CAT_SIM, CAT_INVERTER
 from vysync.vcom_client import VCOMAPIClient
 
@@ -349,8 +349,8 @@ def sync_vcom_to_supabase() -> dict:
     }
 
     # Sauvegarder en JSON
-    report_filename = f"sync_vcom_updates_{datetime.now():%Y%m%d_%H%M%S}.json"
-    with open(report_filename, "w", encoding="utf-8") as f:
+    report_path = get_reports_dir() / f"sync_vcom_updates_{datetime.now():%Y%m%d_%H%M%S}.json"
+    with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
 
     logger.info("\n" + "═" * 60)
@@ -368,7 +368,7 @@ def sync_vcom_to_supabase() -> dict:
     logger.info("  • Modifiés : %d", len(patch_equips.update))
     logger.info("  • Supprimés : %d", len(patch_equips.delete))
     logger.info("")
-    logger.info("Rapport sauvegardé : %s", report_filename)
+    logger.info("Rapport sauvegardé : %s", report_path.name)
     logger.info("═" * 60)
 
     return report
