@@ -256,16 +256,23 @@ def resolve_clients_for_sites(sb_adapter: SupabaseAdapter,
         logger.info("[CLIENT] aucun site orphelin")
         return
 
-    # Pré-chargement région → client
-    reg_map = {r["name_addition"]: r["id"]
-               for r in sb.table("clients_mapping")
-                           .select("id,name_addition").execute().data
-               if r.get("name_addition")}
+    # Pré-chargement région → client (name_addition prioritaire, name en fallback)
+    clients_data = sb.table("clients_mapping") \
+                     .select("id,name,name_addition").execute().data or []
+    name_addition_map = {r["name_addition"]: r["id"]
+                         for r in clients_data
+                         if r.get("name_addition")}
+    name_map = {r["name"]: r["id"]
+                for r in clients_data
+                if r.get("name")}
 
     for s in sites:
         region = re.search(r"\(([^)]+)\)", s["name"] or "")
         region = region.group(1).strip() if region else None
-        client_id = reg_map.get(region) if region else None
+        # Priorité à name_addition, fallback sur name
+        client_id = name_addition_map.get(region) if region else None
+        if not client_id and region:
+            client_id = name_map.get(region)
         if not client_id:
             print(f"\nSite « {s['name']} » sans client.")
             choice = input("ID client existant ou 0 pour créer : ").strip()
