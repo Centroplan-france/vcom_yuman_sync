@@ -285,6 +285,21 @@ class VCOMAPIClient:
         resp = self._make_request("DELETE", f"/tickets/{ticket_id}/outage")
         return resp.status_code == 204
 
+    # -- Ticket Comments ----------------------------------------------------
+    def get_ticket_comments(self, ticket_id: str) -> List[Dict[str, Any]]:
+        """Recupere tous les commentaires d'un ticket."""
+        return self._make_request("GET", f"/tickets/{ticket_id}/comments").json().get("data", [])
+
+    def create_ticket_comment(self, ticket_id: str, comment: str) -> int:
+        """Cree un commentaire sur un ticket. Retourne l'ID du commentaire."""
+        resp = self._make_request("POST", f"/tickets/{ticket_id}/comments", json={"comment": comment})
+        return resp.json().get("data", {}).get("commentId")
+
+    def update_ticket_comment(self, ticket_id: str, comment_id: int, comment: str) -> bool:
+        """Met a jour un commentaire existant."""
+        resp = self._make_request("PATCH", f"/tickets/{ticket_id}/comments/{comment_id}", json={"comment": comment})
+        return resp.status_code == 204
+
     # ------------------------------------------------------------------ #
     # Power Plant Controllers (PPC)                                       #
     # ------------------------------------------------------------------ #
