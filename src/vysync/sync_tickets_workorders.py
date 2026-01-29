@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-sync_tickets_workorders.py – Synchronise les tickets VCOM et les workorders Yuman.
+sync_tickets_workorders.py - Synchronise les tickets VCOM et les workorders Yuman.
 
 Usage:
   poetry run python -m vysync.sync_tickets_workorders [--dry-run]
 
-Ce script exécute le flux suivant :
-  1. Récupère les tickets VCOM (open/assigned/inProgress) puis les upsert dans Supabase.
-  2. Récupère les workorders Yuman puis les upsert dans Supabase.
-  3. Pour chaque workorder Yuman actif : enrichit sa description avec les tickets VCOM du même site non assignés et passe ces tickets à « assigned ».
-  4. Si un site possède des tickets VCOM urgent/high mais aucun workorder actif : crée une workorder_demand Yuman et assigne les tickets.
-  5. Ferme les tickets VCOM liés aux workorders Yuman clôturés.
+Ce script execute le flux suivant :
+  1. Recupere les tickets VCOM (open/assigned/inProgress) puis les upsert dans Supabase.
+  2. Recupere les workorders Yuman puis les upsert dans Supabase.
+  3. Assigne les tickets urgent/high aux WO SAV Reactive existants ou cree de nouveaux WO.
+  4. Assigne les tickets normal aux WO actifs existants (sans creation).
+  5. Synchronise les changements WO vers les tickets (commentaires VYSYNC).
+  6. Ferme les tickets VCOM lies aux workorders Yuman clotures.
 """
 from __future__ import annotations
 
@@ -18,8 +19,8 @@ import argparse
 import os
 import logging
 import textwrap
-from datetime import datetime, timezone
-from typing import Any, Dict, List
+from datetime import datetime, timezone, timedelta
+from typing import Any, Dict, List, Optional
 
 from supabase import create_client
 from vysync.vcom_client import VCOMAPIClient
@@ -28,6 +29,16 @@ from vysync.yuman_client import YumanClient
 # ---------------------------------------------------------------------------
 # Logger global
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Constantes metier
+MANAGER_ID_ANTHONY = 10338
+CATEGORY_SAV_CURATIVE = 11138  # "SAV Maintenance curative"
+WO_TYPE_REACTIVE = "Reactive"
+WO_MAX_AGE_DAYS = 30  # Un WO avec date_planned > 30 jours dans le passe est considere obsolete
+
+# Cache global pour les utilisateurs Yuman (initialise au debut de sync)
+_users_cache: Dict[int, str] = {}
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -39,15 +50,250 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Pas d'écriture ni update sur les APIs/BD",
+        help="Pas d'ecriture ni update sur les APIs/BD",
     )
     return parser.parse_args()
 
 # ---------------------------------------------------------------------------
-# Helpers d'upsert (DB ⇆ Supabase)
+# Helpers pour les nouvelles regles metier
+
+def init_users_cache(yc) -> None:
+    """Initialise le cache des utilisateurs Yuman."""
+    global _users_cache
+    try:
+        _users_cache = yc.get_users_dict()
+        logger.info("Cache utilisateurs Yuman initialise (%d entrees)", len(_users_cache))
+    except Exception as exc:
+        logger.warning("Impossible de charger les utilisateurs Yuman: %s", exc)
+        _users_cache = {}
+
+
+def get_technician_name(yc, tech_id: Optional[int]) -> str:
+    """Recupere le nom du technicien depuis le cache ou l'API."""
+    if tech_id is None:
+        return "Non assigne"
+    if tech_id in _users_cache:
+        return _users_cache[tech_id]
+    # Fallback: essayer de recuperer depuis l'API
+    try:
+        users = yc.get_users_dict()
+        _users_cache.update(users)
+        return _users_cache.get(tech_id, f"Technicien #{tech_id}")
+    except Exception:
+        return f"Technicien #{tech_id}"
+
+
+def format_date(date_str: Optional[str]) -> str:
+    """Formate une date ISO en format francais."""
+    if not date_str:
+        return "N/A"
+    try:
+        if isinstance(date_str, str):
+            # Parse ISO format
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        else:
+            dt = date_str
+        return dt.strftime("%d/%m/%Y")
+    except Exception:
+        return str(date_str)[:10]
+
+
+def parse_date(date_str: Optional[str]) -> Optional[datetime]:
+    """Parse une date ISO en datetime."""
+    if not date_str:
+        return None
+    try:
+        return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def find_best_workorder(
+    workorders: List[Dict[str, Any]],
+    site_id: int,
+    *,
+    require_sav_reactive: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """
+    Trouve le meilleur workorder sur un site selon les regles metier.
+
+    Args:
+        workorders: Liste des workorders Yuman
+        site_id: ID du site Yuman
+        require_sav_reactive: Si True, filtre sur category_id=11138 et workorder_type=Reactive
+
+    Returns:
+        Le workorder le plus approprie ou None
+    """
+    now = datetime.now(timezone.utc)
+    cutoff_date = now - timedelta(days=WO_MAX_AGE_DAYS)
+
+    # Filtrer les WO du site
+    candidates = []
+    for w in workorders:
+        if w.get("site_id") != site_id:
+            continue
+
+        # Exclure les WO clotures
+        if w.get("status", "").lower() == "closed":
+            continue
+
+        # Si on cherche un WO SAV Reactive
+        if require_sav_reactive:
+            if w.get("category_id") != CATEGORY_SAV_CURATIVE:
+                continue
+            if w.get("workorder_type") != WO_TYPE_REACTIVE:
+                continue
+
+            # Verifier que le WO n'est pas trop vieux
+            date_planned = parse_date(w.get("date_planned"))
+            if date_planned and date_planned < cutoff_date:
+                continue
+
+        candidates.append(w)
+
+    if not candidates:
+        return None
+
+    # Trier : date_planned la plus proche dans le futur, sinon la plus recente dans le passe
+    def sort_key(w: Dict[str, Any]) -> tuple:
+        date_planned = parse_date(w.get("date_planned"))
+        if not date_planned:
+            return (2, datetime.max)  # Pas de date -> en dernier
+        if date_planned >= now:
+            return (0, date_planned)  # Dans le futur -> priorite 0, trie par date croissante
+        else:
+            return (1, -date_planned.timestamp())  # Dans le passe -> priorite 1, trie par date decroissante (plus recent d'abord)
+
+    candidates.sort(key=sort_key)
+    return candidates[0]
+
+
+def enrich_workorder_description(
+    yc,
+    wo: Dict[str, Any],
+    tickets: List[Dict[str, Any]],
+    *,
+    dry: bool = False,
+) -> bool:
+    """
+    Enrichit la description d'un workorder avec les informations des tickets.
+
+    Returns:
+        True si l'update a reussi, False sinon
+    """
+    if not tickets:
+        return True
+
+    additional = "".join(
+        f"\n\n--- Ticket VCOM ---\n{t.get('title') or t.get('designation') or t.get('vcom_ticket_id')}:\n{textwrap.fill(t.get('description', '') or '', width=80)}"
+        for t in tickets
+    )
+    new_desc = (wo.get("description") or "") + additional
+
+    if dry:
+        logger.info("[DRY] Enrichissement WO %s avec %d ticket(s)", wo["id"], len(tickets))
+        return True
+
+    try:
+        yc.update_workorder(wo["id"], {"description": new_desc})
+        logger.info("Workorder %s enrichi avec %d ticket(s)", wo["id"], len(tickets))
+        return True
+    except Exception as exc:
+        logger.error("Echec enrichissement workorder %s: %s", wo["id"], exc)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Helpers pour les commentaires VYSYNC
+
+def get_vysync_comment(vc, ticket_id: str) -> Optional[Dict[str, Any]]:
+    """Recupere le commentaire VYSYNC existant s'il existe."""
+    try:
+        comments = vc.get_ticket_comments(ticket_id)
+        for c in comments:
+            if c.get("comment", "").startswith("[VYSYNC] Historique"):
+                return c
+        return None
+    except Exception as exc:
+        logger.warning("Impossible de recuperer les commentaires du ticket %s: %s", ticket_id, exc)
+        return None
+
+
+def update_vysync_comment(sb, vc, ticket: Dict[str, Any], wo: Dict[str, Any], changes: List[str], *, dry: bool = False) -> None:
+    """Met a jour ou cree le commentaire VYSYNC avec l'historique."""
+    ticket_id = ticket["vcom_ticket_id"]
+    wo_number = wo.get("number", wo["id"])
+    today = datetime.now().strftime("%d/%m/%Y")
+
+    # Nouvelle entree
+    new_entry = f"{today} :\n" + "\n".join(f"* {c}" for c in changes)
+
+    # Recuperer le commentaire existant
+    existing = get_vysync_comment(vc, ticket_id)
+
+    if existing:
+        # Ajouter la nouvelle entree en haut (apres le header)
+        old_content = existing["comment"]
+        header = f"[VYSYNC] Historique du WO #{wo_number}\n\n"
+        body = old_content.replace(header, "")
+        new_content = header + new_entry + "\n\n" + body
+
+        if not dry:
+            try:
+                vc.update_ticket_comment(ticket_id, existing["commentId"], new_content)
+                logger.info("Commentaire VYSYNC mis a jour pour ticket %s", ticket_id)
+            except Exception as exc:
+                logger.error("Echec mise a jour commentaire VYSYNC ticket %s: %s", ticket_id, exc)
+    else:
+        # Creer le commentaire
+        new_content = f"[VYSYNC] Historique du WO #{wo_number}\n\n{new_entry}"
+
+        if not dry:
+            try:
+                comment_id = vc.create_ticket_comment(ticket_id, new_content)
+                # Stocker l'ID du commentaire
+                if comment_id:
+                    sb.table("tickets").update({
+                        "vcom_comment_id": comment_id
+                    }).eq("vcom_ticket_id", ticket_id).execute()
+                logger.info("Commentaire VYSYNC cree pour ticket %s", ticket_id)
+            except Exception as exc:
+                logger.error("Echec creation commentaire VYSYNC ticket %s: %s", ticket_id, exc)
+
+
+def post_report_comment(vc, yc, ticket: Dict[str, Any], wo: Dict[str, Any], *, dry: bool = False) -> None:
+    """Poste le rapport d'intervention a la cloture."""
+    ticket_id = ticket["vcom_ticket_id"]
+
+    report = wo.get("report", "")
+    if not report:
+        return  # Pas de rapport a poster
+
+    tech_name = get_technician_name(yc, wo.get("technician_id"))
+    time_taken = wo.get("time_taken", 0)
+    date_done = format_date(wo.get("date_done"))
+
+    content = f"""[VYSYNC] Rapport d'intervention du {date_done}
+
+Technicien : {tech_name}
+Duree : {time_taken} minutes
+
+{report}"""
+
+    if not dry:
+        try:
+            vc.create_ticket_comment(ticket_id, content)
+            logger.info("Rapport poste pour ticket %s", ticket_id)
+        except Exception as exc:
+            logger.error("Echec post rapport ticket %s: %s", ticket_id, exc)
+
+
+# ---------------------------------------------------------------------------
+# Helpers d'upsert (DB - Supabase)
 
 def upsert_tickets(sb, tickets: List[Dict[str, Any]], *, dry: bool = False) -> None:
-    # Récupérer l'ensemble des vcom_system_key valides dans sites_mapping
+    # Recuperer l'ensemble des vcom_system_key valides dans sites_mapping
     valid_system_keys_result = sb.table("sites_mapping").select("vcom_system_key").execute()
     valid_system_keys = {row["vcom_system_key"] for row in valid_system_keys_result.data if row["vcom_system_key"] is not None}
 
@@ -62,11 +308,11 @@ def upsert_tickets(sb, tickets: List[Dict[str, Any]], *, dry: bool = False) -> N
         else:
             ignored_tickets.append(t)
 
-    # Logger les tickets ignorés
+    # Logger les tickets ignores
     if ignored_tickets:
         ignored_ids = [t.get("id") for t in ignored_tickets]
         logger.warning(
-            "%d tickets ignorés (system_key non présent dans sites_mapping): %s",
+            "%d tickets ignores (system_key non present dans sites_mapping): %s",
             len(ignored_tickets),
             ignored_ids
         )
@@ -88,13 +334,14 @@ def upsert_tickets(sb, tickets: List[Dict[str, Any]], *, dry: bool = False) -> N
         return
 
     if dry:
-        logger.info("[DRY] %d tickets à upsert", len(rows))
+        logger.info("[DRY] %d tickets a upsert", len(rows))
     else:
         sb.table("tickets").upsert(rows, on_conflict="vcom_ticket_id").execute()
-        logger.info("%d tickets upsertés", len(rows))
+        logger.info("%d tickets upsertes", len(rows))
+
 
 def upsert_workorders(sb, orders: List[Dict[str, Any]], *, dry: bool = False) -> None:
-    # Récupérer l'ensemble des yuman_site_id valides dans sites_mapping
+    # Recuperer l'ensemble des yuman_site_id valides dans sites_mapping
     valid_site_ids_result = sb.table("sites_mapping").select("yuman_site_id").execute()
     valid_site_ids = {row["yuman_site_id"] for row in valid_site_ids_result.data if row["yuman_site_id"] is not None}
 
@@ -109,11 +356,11 @@ def upsert_workorders(sb, orders: List[Dict[str, Any]], *, dry: bool = False) ->
         else:
             ignored_orders.append(w)
 
-    # Logger les workorders ignorés
+    # Logger les workorders ignores
     if ignored_orders:
         ignored_ids = [w.get("id") for w in ignored_orders]
         logger.warning(
-            "%d work_orders ignorés (site_id non présent dans sites_mapping): %s",
+            "%d work_orders ignores (site_id non present dans sites_mapping): %s",
             len(ignored_orders),
             ignored_ids
         )
@@ -124,7 +371,7 @@ def upsert_workorders(sb, orders: List[Dict[str, Any]], *, dry: bool = False) ->
             "status": w.get("status"),
             "client_id": w.get("client_id"),
             "site_id": w.get("site_id"),
-            "scheduled_date": w.get("date_planned"),  # garder pour compatibilité
+            "scheduled_date": w.get("date_planned"),  # garder pour compatibilite
             "date_planned": w.get("date_planned"),    # nouvelle colonne avec timezone
             "description": w.get("description"),
             "title": w.get("title"),
@@ -141,13 +388,14 @@ def upsert_workorders(sb, orders: List[Dict[str, Any]], *, dry: bool = False) ->
         return
 
     if dry:
-        logger.info("[DRY] %d workorders à upsert", len(rows))
+        logger.info("[DRY] %d workorders a upsert", len(rows))
     else:
         sb.table("work_orders").upsert(rows, on_conflict="workorder_id").execute()
-        logger.info("%d workorders upsertés", len(rows))
+        logger.info("%d workorders upsertes", len(rows))
+
 
 # ---------------------------------------------------------------------------
-# Étape 1 : collecte des tickets VCOM
+# Etape 1 : collecte des tickets VCOM
 
 def collect_vcom_tickets(vc, statuses: List[str] | None = None) -> List[Dict[str, Any]]:
     statuses = statuses or ["open", "assigned", "inProgress", "closed"]
@@ -156,264 +404,404 @@ def collect_vcom_tickets(vc, statuses: List[str] | None = None) -> List[Dict[str
         try:
             chunk = vc.get_tickets(status=st)
             tickets.extend(chunk)
-            logger.info("VCOM: %d tickets récupérés (status=%s)", len(chunk), st)
+            logger.info("VCOM: %d tickets recuperes (status=%s)", len(chunk), st)
         except Exception as exc:
-            logger.error("Erreur récupération tickets VCOM (%s): %s", st, exc)
+            logger.error("Erreur recuperation tickets VCOM (%s): %s", st, exc)
     return tickets
 
+
 # ---------------------------------------------------------------------------
-# Étape 2 : collecte des workorders Yuman
+# Etape 2 : collecte des workorders Yuman
 
 def collect_yuman_workorders(yc) -> List[Dict[str, Any]]:
     try:
         data = yc.list_workorders()
-        logger.info("YUMAN: %d workorders récupérés", len(data))
+        logger.info("YUMAN: %d workorders recuperes", len(data))
         return data
     except Exception as exc:
-        logger.error("Erreur récupération workorders Yuman: %s", exc)
+        logger.error("Erreur recuperation workorders Yuman: %s", exc)
         return []
 
+
 # ---------------------------------------------------------------------------
-# Étapes 1‑bis & 2‑bis : synchronisation DB
+# Etapes 1-bis & 2-bis : synchronisation DB
 
 def sync_tickets_to_db(sb, tickets, *, dry: bool = False) -> None:
     upsert_tickets(sb, tickets, dry=dry)
 
+
 def sync_workorders_to_db(sb, workorders, *, dry: bool = False) -> None:
     upsert_workorders(sb, workorders, dry=dry)
 
+
 # ---------------------------------------------------------------------------
-# Étape 3 : enrichir les workorders actifs et assigner les tickets
+# Etape 3a : Assigner les tickets urgent/high
 
-def assign_tickets_to_active_workorders(
-    sb, vc, yc, workorders: List[Dict[str, Any]], *, dry: bool = False
+def assign_urgent_high_tickets(
+    sb, vc, yc, tickets: List[Dict[str, Any]], workorders: List[Dict[str, Any]], *, dry: bool = False
 ) -> None:
-    # Regroupement des workorders actifs par site
-    active_by_site: Dict[int, List[Dict[str, Any]]] = {}
-    for w in workorders:
-        if w.get("status", "").lower() != "closed":
-            active_by_site.setdefault(w.get("site_id"), []).append(w)
+    """
+    Assigne les tickets urgent/high aux WO SAV Reactive existants ou cree de nouveaux WO.
 
-    for site_id, orders in active_by_site.items():
-        # VCOM system_key ↔ Yuman site_id
-        res = (
-            sb.table("sites_mapping")
-            .select("vcom_system_key")
-            .eq("yuman_site_id", site_id)
-            .execute()
-        )
-        if not res.data:
-            continue
-        system_key = res.data[0]["vcom_system_key"]
+    Regle 1 : Tickets urgent/high
+    - Cherche un WO SAV Reactive sur le site (category_id=11138, workorder_type=Reactive)
+    - Si trouve : enrichit et assigne
+    - Sinon : cree un nouveau WO Reactive
+    """
+    # Filtrer les tickets urgent/high open
+    priority_tickets = [
+        t for t in tickets
+        if t.get("status") == "open" and t.get("priority") in ("urgent", "high")
+    ]
+
+    if not priority_tickets:
+        logger.info("Aucun ticket urgent/high a traiter")
+        return
+
+    logger.info("%d tickets urgent/high a traiter", len(priority_tickets))
+
+    # Regrouper par site
+    by_site: Dict[int, List[Dict[str, Any]]] = {}
+    for t in priority_tickets:
+        system_key = t.get("systemKey")
         if not system_key:
             continue
 
-        # Tickets non assignés sur ce site
-        rows = (
-            sb.table("tickets")
-            .select("*")
-            .eq("system_key", system_key)
-            .not_.in_("status", ["assigned", "inProgress", "closed", "deleted"])
-            .not_.in_("priority", ["low"])
-            .is_("yuman_workorder_id", None)
+        # Recuperer le site_id depuis le mapping
+        row = (
+            sb.table("sites_mapping")
+            .select("yuman_site_id")
+            .eq("vcom_system_key", system_key)
             .execute()
-        )
-        new_tickets = rows.data or []
-        if not new_tickets:
+        ).data
+        if not row or row[0]["yuman_site_id"] is None:
+            logger.debug("Ticket %s ignore - pas de mapping site", t.get("id"))
             continue
 
-        # Enrichissement de la description du premier workorder actif
-        order = orders[0]
-        additional = "".join(
-            f"\n\n{t['title'] or t['vcom_ticket_id']}:\n{textwrap.fill(t.get('description', ''), width=80)}"
-            for t in new_tickets
-        )
-        new_desc = (order.get("description") or "") + additional
+        site_id = row[0]["yuman_site_id"]
+        by_site.setdefault(site_id, []).append(t)
 
-        if not dry:
-            try:
-                yc.update_workorder(order["id"], {"description": new_desc})
-                logger.info("Workorder %s mis à jour", order["id"])
-            except Exception as exc:
-                logger.error("Échec update workorder %s: %s", order["id"], exc)
-                continue
+    for site_id, site_tickets in by_site.items():
+        # Chercher un WO SAV Reactive eligible
+        wo = find_best_workorder(workorders, site_id, require_sav_reactive=True)
 
-        # Passer les tickets à « assigned »
-        for t in new_tickets:
-            tid = t["vcom_ticket_id"]
-            if dry:
-                continue
-            try:
-                vc.update_ticket(tid, status="assigned")
-                sb.table("tickets").update(
-                    {"status": "assigned", "yuman_workorder_id": order["id"]}
-                ).eq("vcom_ticket_id", tid).execute()
-            except Exception as exc:
-                logger.error("Échec update ticket %s: %s", tid, exc)
+        if wo:
+            # WO trouve -> enrichir et assigner
+            logger.info("WO SAV Reactive trouve pour site %s: WO #%s", site_id, wo["id"])
 
-# ---------------------------------------------------------------------------
-# Étape 4 : créer des workorders « Open » pour les sites prioritaires sans WO actif
-def create_workorders_for_priority_sites(
-    sb,
-    vc,
-    yc,
-    tickets: List[Dict[str, Any]],
-    workorders: List[Dict[str, Any]],
-    *,
-    dry: bool = False,
+            # Enrichir la description du WO
+            enrich_workorder_description(yc, wo, site_tickets, dry=dry)
+
+            # Marquer les tickets comme assigned
+            for t in site_tickets:
+                tid = t.get("id") or t.get("vcom_ticket_id")
+                if dry:
+                    logger.info("[DRY] Ticket %s -> assigned (WO %s)", tid, wo["id"])
+                    continue
+                try:
+                    vc.update_ticket(tid, status="assigned")
+                    sb.table("tickets").update({
+                        "status": "assigned",
+                        "yuman_workorder_id": wo["id"],
+                        "last_sync_at": datetime.now(timezone.utc).isoformat()
+                    }).eq("vcom_ticket_id", tid).execute()
+                    logger.info("Ticket %s assigne au WO %s", tid, wo["id"])
+                except Exception as exc:
+                    logger.error("Echec assignation ticket %s: %s", tid, exc)
+        else:
+            # Aucun WO SAV Reactive eligible -> creer un nouveau WO
+            _create_new_workorder_for_tickets(sb, vc, yc, site_id, site_tickets, dry=dry)
+
+
+def _create_new_workorder_for_tickets(
+    sb, vc, yc, site_id: int, tickets: List[Dict[str, Any]], *, dry: bool = False
 ) -> None:
-    # Récupérer l'ensemble des yuman_site_id valides dans sites_mapping
-    valid_site_ids_result = sb.table("sites_mapping").select("yuman_site_id").execute()
-    valid_site_ids = {row["yuman_site_id"] for row in valid_site_ids_result.data if row["yuman_site_id"] is not None}
+    """Cree un nouveau WO Reactive pour un site avec des tickets prioritaires."""
+    # Trier par priorite (urgent d'abord)
+    tickets.sort(key=lambda x: {"urgent": 0, "high": 1}.get(x.get("priority", ""), 2))
 
-    active_sites = {
-        w["site_id"] for w in workorders if w.get("status", "").lower() != "closed"
+    # Recuperer les infos du site depuis le mapping
+    map_row = (
+        sb.table("sites_mapping")
+        .select("client_map_id, address, yuman_site_id")
+        .eq("yuman_site_id", site_id)
+        .execute()
+    ).data
+    if not map_row:
+        logger.error("Pas de mapping trouve pour site %s - WO non cree", site_id)
+        return
+
+    client_map_id = map_row[0]["client_map_id"]
+    address = map_row[0]["address"]
+
+    if not address:
+        logger.error("Address manquante pour site %s - WO non cree", site_id)
+        return
+
+    # Recuperer le yuman_client_id
+    cli_row = (
+        sb.table("clients_mapping")
+        .select("yuman_client_id")
+        .eq("id", client_map_id)
+        .execute()
+    ).data
+    if not cli_row or cli_row[0]["yuman_client_id"] is None:
+        logger.error("yuman_client_id manquant pour client_map_id %s - WO non cree", client_map_id)
+        return
+
+    yuman_client_id = cli_row[0]["yuman_client_id"]
+
+    # Construire le payload
+    title = tickets[0].get("designation") or tickets[0].get("id") or "Ticket VCOM"
+    description = "\n".join(
+        f"{t.get('designation') or t.get('id')}:\n{t.get('description', '')}"
+        for t in tickets
+    )
+
+    payload = {
+        "workorder_type": WO_TYPE_REACTIVE,
+        "category_id": CATEGORY_SAV_CURATIVE,
+        "title": title,
+        "description": description,
+        "client_id": yuman_client_id,
+        "site_id": site_id,
+        "address": address,
+        "manager_id": MANAGER_ID_ANTHONY,
+        # technician_id absent -> non assigne
     }
 
-    # Tickets urgent/high regroupés par site
-    by_site: Dict[int, List[Dict[str, Any]]] = {}
-    for t in tickets:
-        if t.get("status") == "open" and t.get("priority") in ("high", "urgent"):
-            row = (
-                sb.table("sites_mapping")
-                .select("yuman_site_id")
-                .eq("vcom_system_key", t.get("systemKey"))
-                .execute()
-            ).data
-            if row:
-                site_id = row[0]["yuman_site_id"]
-                if site_id is None:
-                    logger.debug(
-                        "Ignoré ticket %s sans yuman_site_id dans sites_mapping",
-                        t.get("id") or t.get("vcom_ticket_id"),
-                    )
-                    continue
-                by_site.setdefault(site_id, []).append(t)
+    if dry:
+        logger.info("[DRY] Creation WO Reactive pour site %s (client %s)", site_id, yuman_client_id)
+        return
 
-    for site_id, ts in by_site.items():
-        # Ignorer les sites non présents dans sites_mapping
-        if site_id not in valid_site_ids:
-            logger.warning(
-                "Site %s ignoré lors de création WO (yuman_site_id non présent dans sites_mapping)",
-                site_id
-            )
-            continue
+    try:
+        res = yc.create_workorder(payload)
+        wo_id = res["id"]
+        wo_number = res.get("number", wo_id)
 
-        if site_id in active_sites:
-            continue  # déjà un WO actif
-
-        # ---------------- Construction du WO -----------------
-        ts.sort(key=lambda x: {"urgent": 0, "high": 1}.get(x["priority"], 2))
-        title = ts[0].get("designation") or ts[0]["id"]
-        description = "\n".join(
-            f"{t.get('designation') or t['id']}:\n{t.get('description', '')}"
-            for t in ts
-        )
-
-        # ► Récupérer client_id + address depuis les tables de mapping
-        map_row = (
-            sb.table("sites_mapping")
-            .select("client_map_id", "address")
-            .eq("yuman_site_id", site_id)
-            .execute()
-        ).data
-        if not map_row:
-            logger.error("❌ Pas de mapping trouvé pour site %s – WO non créé", site_id)
-            continue
-
-        client_map_id, address = map_row[0]["client_map_id"], map_row[0]["address"]
-        if address in (None, ""):
-            logger.error("❌ Address manquante pour site %s – WO non créé", site_id)
-            continue
-
-        cli_row = (
-            sb.table("clients_mapping")
-            .select("yuman_client_id")
-            .eq("id", client_map_id)
-            .execute()
-        ).data
-        if not cli_row or cli_row[0]["yuman_client_id"] is None:
-            logger.error(
-                "❌ yuman_client_id manquant pour client_map_id %s – WO non créé",
-                client_map_id,
-            )
-            continue
-        yuman_client_id = cli_row[0]["yuman_client_id"]
-
-        payload = {
-            "workorder_type": "Reactive",
-            "title": title,
-            "description": description,
-            "client_id": yuman_client_id,
+        # Inserer le WO en base
+        sb.table("work_orders").insert({
+            "workorder_id": wo_id,
+            "status": res.get("status"),
+            "client_id": res.get("client_id"),
             "site_id": site_id,
-            "address": address,
-            "manager_id": 10338,  # Anthony - responsable des WO
-            # date_planned absent → Yuman mettra « Current DateTime »
-        }
+            "scheduled_date": res.get("date_planned"),
+            "date_planned": res.get("date_planned"),
+            "description": res.get("description"),
+            "title": res.get("title"),
+            "category_id": CATEGORY_SAV_CURATIVE,
+            "workorder_type": WO_TYPE_REACTIVE,
+            "manager_id": MANAGER_ID_ANTHONY,
+        }).execute()
 
-        if dry:
-            logger.info("[DRY] Création WO site=%s client=%s", site_id, yuman_client_id)
-            continue
+        # Assigner les tickets a ce WO
+        for t in tickets:
+            tid = t.get("id") or t.get("vcom_ticket_id")
+            try:
+                vc.update_ticket(tid, status="assigned")
+                sb.table("tickets").update({
+                    "status": "assigned",
+                    "yuman_workorder_id": wo_id,
+                    "last_sync_at": datetime.now(timezone.utc).isoformat()
+                }).eq("vcom_ticket_id", tid).execute()
+            except Exception as exc:
+                logger.error("Echec assignation ticket %s: %s", tid, exc)
 
-        # ---------------- Appel API Yuman --------------------
-        try:
-            res = yc.create_workorder(payload)
-            wo_id = res["id"]
+        logger.info("Workorder #%s cree pour site %s (%d tickets)", wo_number, site_id, len(tickets))
 
-            # Insérer le WO en base
-            sb.table("work_orders").insert(
-                {
-                    "workorder_id": wo_id,
-                    "status": res.get("status"),
-                    "client_id": res.get("client_id"),
-                    "site_id": site_id,
-                    "scheduled_date": res.get("date_planned"),
-                    "description": res.get("description"),
-                    "title": res.get("title"),
-                }
-            ).execute()
-
-            # Assigner les tickets VCOM à ce WO
-            for t in ts:
-                vc.update_ticket(t["id"], status="assigned")
-                sb.table("tickets").update(
-                    {"status": "assigned", "yuman_workorder_id": wo_id}
-                ).eq("vcom_ticket_id", t["id"]).execute()
-
-            logger.info("✅ Workorder %s créé pour site %s", wo_id, site_id)
-        except Exception as exc:
-            logger.error("Création WO site %s KO : %s", site_id, exc)
+    except Exception as exc:
+        logger.error("Creation WO site %s KO: %s", site_id, exc)
 
 
 # ---------------------------------------------------------------------------
-# Étape 5 : fermer les tickets VCOM des workorders clos
+# Etape 3b : Assigner les tickets normal
+
+def assign_normal_tickets(
+    sb, vc, yc, tickets: List[Dict[str, Any]], workorders: List[Dict[str, Any]], *, dry: bool = False
+) -> None:
+    """
+    Assigne les tickets normal aux WO actifs existants.
+
+    Regle 2 : Tickets normal
+    - Cherche n'importe quel WO actif sur le site (peu importe category_id ou workorder_type)
+    - Si trouve : enrichit et assigne
+    - Sinon : ignore le ticket (reste open)
+    """
+    # Filtrer les tickets normal open
+    normal_tickets = [
+        t for t in tickets
+        if t.get("status") == "open" and t.get("priority") == "normal"
+    ]
+
+    if not normal_tickets:
+        logger.info("Aucun ticket normal a traiter")
+        return
+
+    logger.info("%d tickets normal a traiter", len(normal_tickets))
+
+    # Regrouper par site
+    by_site: Dict[int, List[Dict[str, Any]]] = {}
+    for t in normal_tickets:
+        system_key = t.get("systemKey")
+        if not system_key:
+            continue
+
+        # Recuperer le site_id depuis le mapping
+        row = (
+            sb.table("sites_mapping")
+            .select("yuman_site_id")
+            .eq("vcom_system_key", system_key)
+            .execute()
+        ).data
+        if not row or row[0]["yuman_site_id"] is None:
+            logger.debug("Ticket %s ignore - pas de mapping site", t.get("id"))
+            continue
+
+        site_id = row[0]["yuman_site_id"]
+        by_site.setdefault(site_id, []).append(t)
+
+    for site_id, site_tickets in by_site.items():
+        # Chercher n'importe quel WO actif sur le site
+        wo = find_best_workorder(workorders, site_id, require_sav_reactive=False)
+
+        if wo:
+            # WO trouve -> enrichir et assigner
+            logger.info("WO actif trouve pour site %s: WO #%s", site_id, wo["id"])
+
+            # Enrichir la description du WO
+            enrich_workorder_description(yc, wo, site_tickets, dry=dry)
+
+            # Marquer les tickets comme assigned
+            for t in site_tickets:
+                tid = t.get("id") or t.get("vcom_ticket_id")
+                if dry:
+                    logger.info("[DRY] Ticket %s (normal) -> assigned (WO %s)", tid, wo["id"])
+                    continue
+                try:
+                    vc.update_ticket(tid, status="assigned")
+                    sb.table("tickets").update({
+                        "status": "assigned",
+                        "yuman_workorder_id": wo["id"],
+                        "last_sync_at": datetime.now(timezone.utc).isoformat()
+                    }).eq("vcom_ticket_id", tid).execute()
+                    logger.info("Ticket %s (normal) assigne au WO %s", tid, wo["id"])
+                except Exception as exc:
+                    logger.error("Echec assignation ticket %s: %s", tid, exc)
+        else:
+            # Aucun WO actif -> ignorer les tickets
+            for t in site_tickets:
+                tid = t.get("id") or t.get("vcom_ticket_id")
+                logger.info("Ticket %s (normal) ignore - aucun WO actif sur site %s", tid, site_id)
+
+
+# ---------------------------------------------------------------------------
+# Etape 4 : Sync des changements WO -> Tickets (commentaires VYSYNC)
+
+def sync_wo_changes_to_tickets(
+    sb, vc, yc, workorders: List[Dict[str, Any]], *, dry: bool = False
+) -> None:
+    """
+    Synchronise les changements WO vers les tickets VCOM (commentaires).
+    """
+    # Recuperer tous les tickets avec un WO assigne
+    tickets_with_wo = sb.table("tickets").select("*").not_.is_("yuman_workorder_id", "null").execute()
+
+    if not tickets_with_wo.data:
+        logger.info("Aucun ticket avec WO assigne a synchroniser")
+        return
+
+    logger.info("%d tickets avec WO a verifier pour changements", len(tickets_with_wo.data))
+
+    # Creer un dict des WO pour lookup rapide
+    wo_by_id = {w["id"]: w for w in workorders}
+
+    for ticket in tickets_with_wo.data:
+        wo_id = ticket["yuman_workorder_id"]
+        wo = wo_by_id.get(wo_id)
+
+        if not wo:
+            continue  # WO n'existe plus ou pas dans la liste
+
+        # Detecter les changements
+        changes = []
+
+        # Changement de technicien
+        old_tech = ticket.get("yuman_technician_id")
+        new_tech = wo.get("technician_id")
+        if old_tech != new_tech and new_tech is not None:
+            tech_name = get_technician_name(yc, new_tech)
+            changes.append(f"WO attribue a : {tech_name}")
+
+        # Changement de date planifiee
+        old_date = ticket.get("yuman_date_planned")
+        new_date = wo.get("date_planned")
+        if old_date != new_date and new_date is not None:
+            date_str = format_date(new_date)
+            changes.append(f"Intervention planifiee : {date_str}")
+
+        # Changement de status (notamment cloture)
+        old_status = ticket.get("yuman_wo_status") or ""
+        new_status = wo.get("status") or ""
+        if old_status.lower() != new_status.lower():
+            if new_status.lower() == "closed":
+                date_done = wo.get("date_done") or datetime.now().isoformat()
+                changes.append(f"WO cloture le {format_date(date_done)}")
+
+        if not changes:
+            continue  # Rien n'a change
+
+        # Mettre a jour le commentaire VYSYNC
+        if dry:
+            logger.info("[DRY] Changements detectes pour ticket %s: %s", ticket["vcom_ticket_id"], changes)
+        else:
+            update_vysync_comment(sb, vc, ticket, wo, changes, dry=dry)
+
+        # Si cloture, poster aussi le report
+        if new_status.lower() == "closed" and old_status.lower() != new_status.lower():
+            post_report_comment(vc, yc, ticket, wo, dry=dry)
+
+        # Mettre a jour la DB
+        if not dry:
+            try:
+                sb.table("tickets").update({
+                    "yuman_technician_id": new_tech,
+                    "yuman_date_planned": new_date,
+                    "yuman_wo_status": new_status,
+                    "last_sync_at": datetime.now(timezone.utc).isoformat()
+                }).eq("vcom_ticket_id", ticket["vcom_ticket_id"]).execute()
+            except Exception as exc:
+                logger.error("Echec mise a jour DB ticket %s: %s", ticket["vcom_ticket_id"], exc)
+
+
+# ---------------------------------------------------------------------------
+# Etape 5 : fermer les tickets VCOM des workorders clos
 
 def close_tickets_of_closed_workorders(
     sb, vc, workorders: List[Dict[str, Any]], *, dry: bool = False
 ) -> None:
     """
-    Ferme les tickets VCOM dont le workorder Yuman est clôturé.
+    Ferme les tickets VCOM dont le workorder Yuman est cloture.
 
     Args:
         sb: Client Supabase
         vc: Client VCOM
-        workorders: Liste des workorders Yuman (déjà récupérés)
+        workorders: Liste des workorders Yuman (deja recuperes)
         dry: Mode dry-run
     """
-    # Filtrer les WO clôturés (comparaison case-insensitive)
+    # Filtrer les WO clotures (comparaison case-insensitive)
     closed_wo_ids = [
         w["id"] for w in workorders
         if w.get("status", "").lower() == "closed"
     ]
 
     if not closed_wo_ids:
-        logger.info("Aucun workorder clôturé à traiter")
+        logger.info("Aucun workorder cloture a traiter")
         return
 
-    logger.info("%d workorders clôturés à vérifier", len(closed_wo_ids))
+    logger.info("%d workorders clotures a verifier", len(closed_wo_ids))
 
     for wo_id in closed_wo_ids:
-        # Vérifier le status actuel en DB
+        # Verifier le status actuel en DB
         res = (
             sb.table("work_orders")
             .select("status")
@@ -421,15 +809,15 @@ def close_tickets_of_closed_workorders(
             .execute()
         )
 
-        # Si pas en DB ou déjà marqué closed, skip
+        # Si pas en DB ou deja marque closed, skip
         if not res.data:
             continue
 
         db_status = res.data[0].get("status", "")
         if db_status.lower() == "closed":
-            continue  # déjà synchronisé
+            continue  # deja synchronise
 
-        # Récupérer les tickets liés à ce WO
+        # Recuperer les tickets lies a ce WO
         t_rows = (
             sb.table("tickets")
             .select("vcom_ticket_id, status")
@@ -444,12 +832,12 @@ def close_tickets_of_closed_workorders(
 
         if dry:
             logger.info(
-                "[DRY] Clôture WO %s (status DB: %s) + %d tickets",
+                "[DRY] Cloture WO %s (status DB: %s) + %d tickets",
                 wo_id, db_status, len(tickets_to_close)
             )
             continue
 
-        # Mettre à jour le WO en DB
+        # Mettre a jour le WO en DB
         sb.table("work_orders").update({
             "status": "Closed",
             "updated_at": datetime.now(timezone.utc).isoformat()
@@ -465,49 +853,65 @@ def close_tickets_of_closed_workorders(
                     "yuman_wo_status": "Closed",
                     "last_sync_at": datetime.now(timezone.utc).isoformat()
                 }).eq("vcom_ticket_id", tid).execute()
-                logger.info("✅ Ticket %s fermé (WO %s clôturé)", tid, wo_id)
+                logger.info("Ticket %s ferme (WO %s cloture)", tid, wo_id)
             except Exception as exc:
-                logger.error("❌ Échec fermeture ticket %s: %s", tid, exc)
+                logger.error("Echec fermeture ticket %s: %s", tid, exc)
 
-        logger.info("✅ WO %s marqué Closed + %d tickets fermés", wo_id, len(tickets_to_close))
+        logger.info("WO %s marque Closed + %d tickets fermes", wo_id, len(tickets_to_close))
+
 
 # ---------------------------------------------------------------------------
 # Orchestrateur principal
 
 def run_tickets_sync(dry_run: bool = False) -> int:
     """
-    Logique métier de synchronisation tickets VCOM ↔ workorders Yuman.
+    Logique metier de synchronisation tickets VCOM - workorders Yuman.
 
     Args:
-        dry_run: Si True, pas d'écriture ni update sur les APIs/BD
+        dry_run: Si True, pas d'ecriture ni update sur les APIs/BD
 
     Returns:
-        0 en cas de succès, 1 en cas d'erreur
+        0 en cas de succes, 1 en cas d'erreur
     """
     # Connexions externes
     sb = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
     vc = VCOMAPIClient()
     yc = YumanClient(os.getenv("YUMAN_TOKEN"))
 
-    # 1. Collecte
+    # 0. Initialiser le cache des utilisateurs Yuman
+    logger.info("=== Etape 0 : Initialisation cache utilisateurs ===")
+    init_users_cache(yc)
+
+    # 1. Collecte des donnees
+    logger.info("=== Etape 1 : Collecte des donnees ===")
     tickets = collect_vcom_tickets(vc)
     workorders = collect_yuman_workorders(yc)
 
-    # 2. DB sync
+    # 2. Sync vers DB
+    logger.info("=== Etape 2 : Synchronisation DB ===")
     sync_tickets_to_db(sb, tickets, dry=dry_run)
     sync_workorders_to_db(sb, workorders, dry=dry_run)
 
-    # 3‑5. Règles métier
-    assign_tickets_to_active_workorders(sb, vc, yc, workorders, dry=dry_run)
-    create_workorders_for_priority_sites(sb, vc, yc, tickets, workorders, dry=dry_run)
+    # 3. Assignation des tickets selon nouvelles regles
+    logger.info("=== Etape 3 : Assignation des tickets ===")
+    assign_urgent_high_tickets(sb, vc, yc, tickets, workorders, dry=dry_run)
+    assign_normal_tickets(sb, vc, yc, tickets, workorders, dry=dry_run)
+    # Note: tickets "low" sont ignores
+
+    # 4. Sync des changements WO -> Tickets (commentaires VYSYNC)
+    logger.info("=== Etape 4 : Sync WO -> Tickets (commentaires) ===")
+    sync_wo_changes_to_tickets(sb, vc, yc, workorders, dry=dry_run)
+
+    # 5. Fermeture des tickets dont le WO est cloture
+    logger.info("=== Etape 5 : Fermeture des tickets ===")
     close_tickets_of_closed_workorders(sb, vc, workorders, dry=dry_run)
 
-    logger.info("✅ Synchronisation terminée")
+    logger.info("Synchronisation terminee")
     return 0
 
 
 def main() -> int:
-    """Point d'entrée CLI pour le script standalone."""
+    """Point d'entree CLI pour le script standalone."""
     args = parse_args()
     return run_tickets_sync(dry_run=args.dry_run)
 

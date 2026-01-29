@@ -297,8 +297,34 @@ class YumanClient:  # pylint: disable=too-many-public-methods
     
     def get_fields(self) -> List[Dict[str, Any]]:
         """
-        Récupère la liste de tous les champs custom de matériaux côté Yuman.
-        Appelle l’endpoint GET /materials/fields et renvoie la liste brute.
+        Recupere la liste de tous les champs custom de materiaux cote Yuman.
+        Appelle l'endpoint GET /materials/fields et renvoie la liste brute.
         """
         return self._get("materials/fields")
+
+    # ------------------------------------------------------------------ #
+    # Users                                                              #
+    # ------------------------------------------------------------------ #
+    def list_users(self, per_page: int = 100) -> List[Dict[str, Any]]:
+        """Recupere la liste des utilisateurs Yuman."""
+        return self._get("users", params={"perPage": per_page})
+
+    def get_users_dict(self) -> Dict[int, str]:
+        """Retourne un dict {user_id: user_name} pour lookup rapide."""
+        users = self.list_users()
+        result = {}
+        for u in users:
+            user_id = u.get("id")
+            if user_id is None:
+                continue
+            # Construire le nom complet
+            name = u.get("name")
+            if not name:
+                first = u.get("first_name", "") or ""
+                last = u.get("last_name", "") or ""
+                name = f"{first} {last}".strip()
+            if not name:
+                name = f"User #{user_id}"
+            result[user_id] = name
+        return result
     
