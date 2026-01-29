@@ -18,6 +18,7 @@ import argparse
 import os
 import logging
 import textwrap
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from supabase import create_client
@@ -123,9 +124,15 @@ def upsert_workorders(sb, orders: List[Dict[str, Any]], *, dry: bool = False) ->
             "status": w.get("status"),
             "client_id": w.get("client_id"),
             "site_id": w.get("site_id"),
-            "scheduled_date": w.get("date_planned"),
+            "scheduled_date": w.get("date_planned"),  # garder pour compatibilité
+            "date_planned": w.get("date_planned"),    # nouvelle colonne avec timezone
             "description": w.get("description"),
             "title": w.get("title"),
+            "category_id": w.get("category_id"),
+            "workorder_type": w.get("workorder_type"),
+            "technician_id": w.get("technician_id"),
+            "manager_id": w.get("manager_id"),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         for w in valid_orders
     ]
@@ -143,7 +150,7 @@ def upsert_workorders(sb, orders: List[Dict[str, Any]], *, dry: bool = False) ->
 # Étape 1 : collecte des tickets VCOM
 
 def collect_vcom_tickets(vc, statuses: List[str] | None = None) -> List[Dict[str, Any]]:
-    statuses = statuses or ["open", "assigned", "inProgress"]
+    statuses = statuses or ["open", "assigned", "inProgress", "closed"]
     tickets: List[Dict[str, Any]] = []
     for st in statuses:
         try:
@@ -340,7 +347,7 @@ def create_workorders_for_priority_sites(
             "client_id": yuman_client_id,
             "site_id": site_id,
             "address": address,
-            "manager_id": 10339,  # manager fixe fourni
+            "manager_id": 10338,  # Anthony - responsable des WO
             # date_planned absent → Yuman mettra « Current DateTime »
         }
 
@@ -381,45 +388,88 @@ def create_workorders_for_priority_sites(
 # ---------------------------------------------------------------------------
 # Étape 5 : fermer les tickets VCOM des workorders clos
 
-def close_tickets_of_closed_workorders(sb, vc, yc, *, dry: bool = False) -> None:
-    closed_ids = [
-        w["id"] for w in yc.list_workorders() if w.get("status", "").lower() == "closed"
+def close_tickets_of_closed_workorders(
+    sb, vc, workorders: List[Dict[str, Any]], *, dry: bool = False
+) -> None:
+    """
+    Ferme les tickets VCOM dont le workorder Yuman est clôturé.
+
+    Args:
+        sb: Client Supabase
+        vc: Client VCOM
+        workorders: Liste des workorders Yuman (déjà récupérés)
+        dry: Mode dry-run
+    """
+    # Filtrer les WO clôturés (comparaison case-insensitive)
+    closed_wo_ids = [
+        w["id"] for w in workorders
+        if w.get("status", "").lower() == "closed"
     ]
 
-    for wo_id in closed_ids:
+    if not closed_wo_ids:
+        logger.info("Aucun workorder clôturé à traiter")
+        return
+
+    logger.info("%d workorders clôturés à vérifier", len(closed_wo_ids))
+
+    for wo_id in closed_wo_ids:
+        # Vérifier le status actuel en DB
         res = (
             sb.table("work_orders")
             .select("status")
             .eq("workorder_id", wo_id)
             .execute()
         )
-        if not res.data or res.data[0]["status"].lower() == "closed":
+
+        # Si pas en DB ou déjà marqué closed, skip
+        if not res.data:
+            continue
+
+        db_status = res.data[0].get("status", "")
+        if db_status.lower() == "closed":
             continue  # déjà synchronisé
 
+        # Récupérer les tickets liés à ce WO
         t_rows = (
             sb.table("tickets")
-            .select("vcom_ticket_id")
+            .select("vcom_ticket_id, status")
             .eq("yuman_workorder_id", wo_id)
             .execute()
         )
 
+        tickets_to_close = [
+            row for row in (t_rows.data or [])
+            if row.get("status", "").lower() not in ("closed", "deleted")
+        ]
+
         if dry:
-            logger.info("[DRY] Clôture WO %s + %d tickets", wo_id, len(t_rows.data or []))
+            logger.info(
+                "[DRY] Clôture WO %s (status DB: %s) + %d tickets",
+                wo_id, db_status, len(tickets_to_close)
+            )
             continue
 
-        sb.table("work_orders").update({"status": "closed"}).eq(
-            "workorder_id", wo_id
-        ).execute()
+        # Mettre à jour le WO en DB
+        sb.table("work_orders").update({
+            "status": "Closed",
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).eq("workorder_id", wo_id).execute()
 
-        for row in t_rows.data or []:
+        # Fermer chaque ticket VCOM
+        for row in tickets_to_close:
             tid = row["vcom_ticket_id"]
             try:
                 vc.close_ticket(tid)
-                sb.table("tickets").update({"status": "closed"}).eq(
-                    "vcom_ticket_id", tid
-                ).execute()
+                sb.table("tickets").update({
+                    "status": "closed",
+                    "yuman_wo_status": "Closed",
+                    "last_sync_at": datetime.now(timezone.utc).isoformat()
+                }).eq("vcom_ticket_id", tid).execute()
+                logger.info("✅ Ticket %s fermé (WO %s clôturé)", tid, wo_id)
             except Exception as exc:
-                logger.error("Échec fermeture ticket %s: %s", tid, exc)
+                logger.error("❌ Échec fermeture ticket %s: %s", tid, exc)
+
+        logger.info("✅ WO %s marqué Closed + %d tickets fermés", wo_id, len(tickets_to_close))
 
 # ---------------------------------------------------------------------------
 # Orchestrateur principal
@@ -450,7 +500,7 @@ def run_tickets_sync(dry_run: bool = False) -> int:
     # 3‑5. Règles métier
     assign_tickets_to_active_workorders(sb, vc, yc, workorders, dry=dry_run)
     create_workorders_for_priority_sites(sb, vc, yc, tickets, workorders, dry=dry_run)
-    close_tickets_of_closed_workorders(sb, vc, yc, dry=dry_run)
+    close_tickets_of_closed_workorders(sb, vc, workorders, dry=dry_run)
 
     logger.info("✅ Synchronisation terminée")
     return 0
