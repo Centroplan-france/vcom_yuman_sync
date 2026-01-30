@@ -17,6 +17,7 @@ class Site:
     yuman_site_id: Optional[int] = None             # clé Yuman (peut être NULL)
     id: Optional[int] = None
     client_map_id: Optional[int] = None
+    yuman_client_id: Optional[int] = None           # yuman_client_id du client associé au site
     code: Optional[int] = None                      # code yuman
     latitude: Optional[float] = None
     longitude: Optional[float] = None
