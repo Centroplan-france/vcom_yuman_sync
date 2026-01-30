@@ -290,7 +290,17 @@ def sync_sites(
     Retourne un dict avec les compteurs et conflits.
     """
     logger.info("[SITES] Démarrage synchronisation...")
-    
+
+    # 0) Pré-charger le mapping yuman_client_id → client_map_id
+    # Les clients sont synchronisés AVANT les sites dans le workflow
+    clients_data = sb.sb.table("clients_mapping").select("id,yuman_client_id").execute().data or []
+    yuman_to_client_map = {
+        c["yuman_client_id"]: c["id"]
+        for c in clients_data
+        if c.get("yuman_client_id")
+    }
+    logger.info("[SITES] %d clients mappés (yuman_client_id → client_map_id)", len(yuman_to_client_map))
+
     # 1) Snapshot Yuman (indexé par yuman_site_id)
     y_sites = y.fetch_sites()  # Dict[yuman_site_id, Site]
     logger.info("[SITES] %d sites Yuman", len(y_sites))
@@ -325,7 +335,11 @@ def sync_sites(
         if yid in db_ignored_yuman_ids:
             skipped_ignored += 1
             continue
-        
+
+        # Résoudre le client_map_id depuis le yuman_client_id du site
+        yuman_client_id = getattr(y_site, "yuman_client_id", None)
+        y_client_map_id = yuman_to_client_map.get(yuman_client_id) if yuman_client_id else None
+
         if yid not in db_by_yuman_id:
             # Nouveau site Yuman → INSERT (avec vcom_system_key = NULL)
             to_insert.append({
@@ -340,6 +354,7 @@ def sync_sites(
                 "project_number_cp": y_site.project_number_cp,
                 "nominal_power": y_site.nominal_power,
                 "commission_date": y_site.commission_date,
+                "client_map_id": y_client_map_id,  # Client récupéré depuis l'API Yuman
                 "vcom_system_key": None,  # Explicitement NULL
                 "created_at": _now_iso(),
             })
@@ -364,9 +379,9 @@ def sync_sites(
                 })
             
             # B) Détecter conflit client_map_id
+            # y_client_map_id est déjà résolu plus haut depuis yuman_client_id
             db_client_map_id = db_row.get("client_map_id")
-            y_client_map_id = getattr(y_site, "client_map_id", None)
-            
+
             if (
                 not _is_empty(db_client_map_id)
                 and not _is_empty(y_client_map_id)

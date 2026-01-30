@@ -40,7 +40,7 @@ def _load_region_client_mapping(sb: SupabaseAdapter) -> Dict[str, int]:
 
     Cette fonction charge tous les clients depuis la table clients_mapping
     et crée un dictionnaire de correspondance entre le nom de région (name_addition)
-    et l'id du client.
+    et l'id du client, avec fallback sur le name du client.
 
     Args:
         sb: Instance de SupabaseAdapter pour accéder à la base de données
@@ -52,21 +52,24 @@ def _load_region_client_mapping(sb: SupabaseAdapter) -> Dict[str, int]:
         {"Sauvian": 42, "Reims": 15, "Lyon": 23, ...}
 
     Note:
-        Les entrées sans name_addition sont ignorées car elles ne peuvent pas
-        être associées automatiquement à un site.
+        Priorité à name_addition, puis fallback sur name si la clé n'existe pas déjà.
     """
-    # Récupération de tous les clients avec leur nom de région (name_addition)
+    # Récupération de tous les clients avec leur nom et nom de région (name_addition)
     result = sb.sb.table("clients_mapping") \
-                   .select("id,name_addition") \
+                   .select("id,name,name_addition") \
                    .execute()
 
     # Construction du dictionnaire région → client_id
-    # On filtre pour ne garder que les entrées avec une région définie
-    return {
-        row["name_addition"]: row["id"]
-        for row in result.data
-        if row.get("name_addition")  # Ignore les clients sans région
-    }
+    mapping = {}
+    for row in result.data:
+        # Priorité à name_addition
+        if row.get("name_addition"):
+            mapping[row["name_addition"]] = row["id"]
+        # Fallback sur name (si pas déjà présent)
+        if row.get("name") and row["name"] not in mapping:
+            mapping[row["name"]] = row["id"]
+
+    return mapping
 
 
 def _extract_region(site_name: str) -> Optional[str]:
@@ -251,18 +254,12 @@ def sync_new_sites_and_names() -> dict:
     db_sites = sb.fetch_sites_v()
     logger.info("  • Sites Supabase récupérés : %d", len(db_sites))
 
-    # Pré-chargement du mapping région → client_id
-    # Évite de requêter la base pour chaque site (optimisation performance)
-    region_to_client_id = _load_region_client_mapping(sb)
-    logger.info("  • Clients mappés : %d", len(region_to_client_id))
-
     # ═══════════════════════════════════════════════════════════════
     # COMPTEURS ET LOGS (accumulateurs pour le rapport final)
     # ═══════════════════════════════════════════════════════════════
     new_sites_created = []  # Sites créés avec succès
     new_sites_errors = []  # Échecs de création (avec détails erreur)
     name_changes = []  # Changements de nom détectés et appliqués
-    client_not_found_warnings = []  # Clients introuvables (nécessitent action manuelle)
 
     # ═══════════════════════════════════════════════════════════════
     # BOUCLE PRINCIPALE : TRAITEMENT DE TOUS LES SITES VCOM
@@ -281,23 +278,12 @@ def sync_new_sites_and_names() -> dict:
             try:
                 logger.info("\n[NOUVEAU SITE] %s : %s", key, vcom_name)
 
-                # ── A. EXTRACTION DU CLIENT DEPUIS LE NOM ──
-                # Le nom suit le format : "XX CLIENT Description (REGION)"
-                # On extrait la région et on cherche le client_id correspondant
-                client_id = _extract_and_find_client(
-                    vcom_name,
-                    region_to_client_id,
-                    warnings=client_not_found_warnings,  # Accumule les warnings
-                    site_key=key
-                )
+                # NOTE: Le client_map_id sera défini plus tard via:
+                # 1. sync_yuman_to_supabase qui crée les sites Yuman avec leur client
+                # 2. auto_merge_sites qui transfert le client_map_id lors du merge
+                logger.info("  • Site créé sans client (client_map_id=NULL, sera résolu par auto_merge)")
 
-                # Affichage du résultat de la recherche client
-                if client_id:
-                    logger.info("  • Client trouvé : id=%d", client_id)
-                else:
-                    logger.warning("  • Client introuvable → client_map_id sera NULL")
-
-                # ── B. RÉCUPÉRATION DU SNAPSHOT COMPLET DEPUIS VCOM ──
+                # ── A. RÉCUPÉRATION DU SNAPSHOT COMPLET DEPUIS VCOM ──
                 # fetch_snapshot récupère :
                 # - Les données du site (coordonnées, puissance nominale, etc.)
                 # - Tous les équipements associés (onduleurs, modules, strings, etc.)
@@ -309,20 +295,17 @@ def sync_new_sites_and_names() -> dict:
                 )
                 logger.info("  • Équipements récupérés : %d", len(v_equips))
 
-                # ── C. ASSIGNATION DU CLIENT AU SITE ──
-                # IMPORTANT : Site est une dataclass frozen=True
-                # On ne peut pas faire site.client_map_id = client_id
-                # Il faut utiliser dataclasses.replace() pour créer une nouvelle instance
+                # ── B. RÉCUPÉRATION DU SITE ──
+                # Le site est créé sans client_map_id (sera résolu par auto_merge_sites)
                 site = v_sites[key]
-                site_with_client = replace(site, client_map_id=client_id)
 
-                # ── D. INSERTION DU SITE DANS SUPABASE ──
+                # ── C. INSERTION DU SITE DANS SUPABASE ──
                 logger.info("  • Insertion du site en base de données...")
                 sb.apply_sites_patch(
-                    PatchSet(add=[site_with_client], update=[], delete=[])
+                    PatchSet(add=[site], update=[], delete=[])
                 )
 
-                # ── E. RÉCUPÉRATION DU site_id GÉNÉRÉ PAR SUPABASE ──
+                # ── D. RÉCUPÉRATION DU site_id GÉNÉRÉ PAR SUPABASE ──
                 # Nécessaire pour assigner le site_id aux équipements avant insertion
                 result = sb.sb.table("sites_mapping") \
                               .select("id") \
@@ -332,7 +315,7 @@ def sync_new_sites_and_names() -> dict:
                 new_site_id = result.data["id"]
                 logger.info("  • Site créé avec id=%d", new_site_id)
 
-                # ── F. MISE À JOUR DES ÉQUIPEMENTS AVEC LE SITE_ID ──
+                # ── E. MISE À JOUR DES ÉQUIPEMENTS AVEC LE SITE_ID ──
                 # IMPORTANT : Equipment est une dataclass frozen=True
                 # Il faut utiliser dataclasses.replace() pour créer de nouvelles instances
                 equips_with_site_id = []
@@ -340,18 +323,17 @@ def sync_new_sites_and_names() -> dict:
                     eq_updated = replace(eq, site_id=new_site_id)
                     equips_with_site_id.append(eq_updated)
 
-                # ── G. INSERTION DES ÉQUIPEMENTS ──
+                # ── F. INSERTION DES ÉQUIPEMENTS ──
                 logger.info("  • Insertion des %d équipements...", len(equips_with_site_id))
                 sb.apply_equips_patch(
                     PatchSet(add=equips_with_site_id, update=[], delete=[])
                 )
 
-                # ── H. LOGGING DU SUCCÈS ──
+                # ── G. LOGGING DU SUCCÈS ──
                 # Ajout à la liste des sites créés (pour le rapport JSON)
                 new_sites_created.append({
                     "vcom_system_key": key,
                     "name": vcom_name,
-                    "client_id": client_id,
                     "site_id": new_site_id,
                     "equipments_count": len(v_equips),
                     "timestamp": datetime.now(timezone.utc).isoformat()
@@ -394,55 +376,23 @@ def sync_new_sites_and_names() -> dict:
                     logger.info("  • Ancien : %s", db_name)
                     logger.info("  • Nouveau : %s", vcom_name)
 
-                    # ── A. EXTRACTION DES ANCIENS/NOUVEAUX CLIENTS ──
-                    # Les noms incluent le client entre parenthèses
-                    # Il faut extraire et comparer les deux pour détecter un changement de client
-                    old_region = _extract_region(db_name)
-                    new_region = _extract_region(vcom_name)
-
-                    logger.info("  • Ancien client : %s", old_region or "N/A")
-                    logger.info("  • Nouveau client : %s", new_region or "N/A")
-
-                    # ── B. RECHERCHE DU NOUVEAU CLIENT ──
-                    # Cherche le nouveau client_id dans le mapping pré-chargé
-                    new_client_id = region_to_client_id.get(new_region) if new_region else None
-
-                    # Warning si le nouveau client n'existe pas
-                    if new_client_id is None and new_region:
-                        logger.warning(
-                            "  ⚠️  Nouveau client '%s' introuvable dans clients_mapping",
-                            new_region
-                        )
-                        # Ajout au rapport pour résolution manuelle ultérieure
-                        client_not_found_warnings.append({
-                            "site_key": key,
-                            "region": new_region,
-                            "context": "name_change"  # Contexte : changement de nom
-                        })
-
-                    # ── C. UPDATE DANS SUPABASE ──
-                    # Mise à jour simultanée de :
-                    # - name : nouveau nom du site
-                    # - client_map_id : nouveau client (ou NULL si introuvable)
+                    # ── A. UPDATE DANS SUPABASE ──
+                    # Mise à jour uniquement du nom
+                    # NOTE: Le client_map_id est maintenant géré par auto_merge_sites
                     sb.sb.table("sites_mapping").update({
                         "name": vcom_name,
-                        "client_map_id": new_client_id
                     }).eq("vcom_system_key", key).execute()
 
-                    # ── D. LOGGING DU CHANGEMENT ──
+                    # ── B. LOGGING DU CHANGEMENT ──
                     # Ajout au rapport avec tous les détails pour traçabilité
                     name_changes.append({
                         "vcom_system_key": key,
                         "old_name": db_name,
                         "new_name": vcom_name,
-                        "old_client_region": old_region,
-                        "new_client_region": new_region,
-                        "old_client_id": db_site.client_map_id,
-                        "new_client_id": new_client_id,
                         "timestamp": datetime.now(timezone.utc).isoformat()
                     })
 
-                    logger.info("  ✓ Nom et client mis à jour")
+                    logger.info("  ✓ Nom mis à jour")
 
                 except Exception as e:
                     # Gestion des erreurs pour les mises à jour de nom
@@ -473,14 +423,12 @@ def sync_new_sites_and_names() -> dict:
             "new_sites_created": len(new_sites_created),
             "new_sites_failed": len(new_sites_errors),
             "name_changes_detected": len(name_changes),
-            "clients_not_found": len(client_not_found_warnings)
         },
 
         # Détails des opérations (avec timestamps et métadonnées complètes)
         "new_sites_created": new_sites_created,
         "new_sites_errors": new_sites_errors,
         "name_changes": name_changes,
-        "client_warnings": client_not_found_warnings
     }
 
     # ── SAUVEGARDE DU RAPPORT EN FICHIER JSON ──
@@ -501,7 +449,6 @@ def sync_new_sites_and_names() -> dict:
     logger.info("  • Nouveaux sites créés : %d", len(new_sites_created))
     logger.info("  • Échecs création      : %d", len(new_sites_errors))
     logger.info("  • Changements de nom   : %d", len(name_changes))
-    logger.info("  • Clients introuvables : %d", len(client_not_found_warnings))
     logger.info("  • Rapport sauvegardé   : %s", report_path.name)
     logger.info("═" * 60)
 

@@ -128,7 +128,10 @@ class YumanAdapter:
   
           vcom_key = (cvals.get("System Key (Vcom ID)") or "").strip() or None
           yuman_site_id   = s["id"]
-  
+
+          # Client ID du site Yuman (récupéré depuis l'API)
+          yuman_client_id = s.get("client_id")
+
           # Champs optionnels
           aldi_id           = (cvals.get("ALDI ID")                    or "").strip() or None
           aldi_store_id     = (cvals.get("ID magasin (n° interne Aldi)") or "").strip() or None
@@ -148,6 +151,7 @@ class YumanAdapter:
               vcom_system_key = vcom_key,      # peut être NULL ou rempli si déjà mappé
               yuman_site_id   = yuman_site_id,  # identifiant Yuman
               id              = self.sb._map_yid_to_id.get(yuman_site_id),
+              yuman_client_id = yuman_client_id,  # client_id Yuman du site
               address         = s.get("address"),
               commission_date = commission_iso,
               nominal_power   = (

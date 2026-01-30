@@ -37,6 +37,9 @@ import logging
 
 from supabase import create_client, Client
 
+from vysync.adapters.supabase_adapter import SupabaseAdapter
+from vysync.sync_new_sites import _load_region_client_mapping, _extract_region
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
@@ -284,14 +287,98 @@ def find_potential_matches(vcom_only: List[SiteInfo],
 # FUSION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def merge_single_pair(sb: Client, vcom_id: int, yuman_id: int, yuman_site_id: int) -> MergeResult:
-    """Fusionne une paire via RPC."""
+def resolve_client_for_unmatched_vcom(
+    sb: Client,
+    unmatched_sites: List[SiteInfo],
+    region_to_client: Dict[str, int],
+) -> List[Dict[str, Any]]:
+    """
+    Résout le client_map_id pour les sites VCOM sans correspondance Yuman.
+
+    Pour chaque site VCOM sans client_map_id et sans Yuman, tente de résoudre
+    le client via l'extraction de la région depuis le nom du site.
+
+    Args:
+        sb: Client Supabase
+        unmatched_sites: Liste des sites VCOM sans correspondance Yuman
+        region_to_client: Mapping région → client_map_id
+
+    Returns:
+        Liste des sites mis à jour avec leur nouveau client_map_id
+    """
+    resolved = []
+
+    for site in unmatched_sites:
+        # Skip si le site a déjà un client_map_id
+        if site.client_map_id:
+            continue
+
+        # Tenter d'extraire la région du nom
+        region = _extract_region(site.name)
+        if not region:
+            continue
+
+        # Chercher le client_map_id correspondant
+        client_map_id = region_to_client.get(region)
+        if not client_map_id:
+            continue
+
+        # Mettre à jour le site
+        try:
+            sb.table(SITES_TABLE).update({
+                "client_map_id": client_map_id
+            }).eq("id", site.id).execute()
+
+            resolved.append({
+                "site_id": site.id,
+                "vcom_system_key": site.vcom_system_key,
+                "name": site.name,
+                "region": region,
+                "client_map_id": client_map_id,
+            })
+            logger.info(
+                "[FALLBACK] Site %s (%s) → client_map_id=%d (région: %s)",
+                site.id, site.vcom_system_key, client_map_id, region
+            )
+        except Exception as e:
+            logger.error(
+                "[FALLBACK] Erreur mise à jour site %s: %s",
+                site.id, e
+            )
+
+    return resolved
+
+
+def merge_single_pair(
+    sb: Client,
+    vcom_id: int,
+    yuman_id: int,
+    yuman_site_id: int,
+    vcom_client_map_id: Optional[int],
+    yuman_client_map_id: Optional[int],
+) -> MergeResult:
+    """
+    Fusionne une paire via RPC et transfère le client_map_id si nécessaire.
+
+    Si le site VCOM n'a pas de client_map_id mais le site Yuman en a un,
+    le client_map_id du Yuman est transféré au site VCOM après la fusion.
+    """
     try:
         sb.rpc("merge_sites", {
             "vcom_id": vcom_id,
             "yuman_id": yuman_id,
         }).execute()
-        
+
+        # Transfert du client_map_id si le VCOM n'en a pas et le Yuman en a un
+        if not vcom_client_map_id and yuman_client_map_id:
+            sb.table(SITES_TABLE).update({
+                "client_map_id": yuman_client_map_id
+            }).eq("id", vcom_id).execute()
+            logger.debug(
+                "[MERGE] client_map_id=%d transféré de Yuman (id=%d) vers VCOM (id=%d)",
+                yuman_client_map_id, yuman_id, vcom_id
+            )
+
         # Log
         sb.table(SYNC_LOGS_TABLE).insert({
             "source": "user",
@@ -301,11 +388,12 @@ def merge_single_pair(sb: Client, vcom_id: int, yuman_id: int, yuman_site_id: in
                 "into_site_id": vcom_id,
                 "yuman_site_id": yuman_site_id,
                 "script": "auto_merge_sites",
+                "client_map_id_transferred": not vcom_client_map_id and yuman_client_map_id is not None,
             }),
             "created_at": _now_iso(),
         }).execute()
-        
-        return MergeResult(vcom_id=vcom_id, yuman_id=yuman_id, 
+
+        return MergeResult(vcom_id=vcom_id, yuman_id=yuman_id,
                           yuman_site_id=yuman_site_id, success=True)
     except Exception as e:
         return MergeResult(vcom_id=vcom_id, yuman_id=yuman_id,
@@ -400,12 +488,13 @@ def generate_report(vcom_only: List[SiteInfo],
                     matches: List[PotentialMatch],
                     merge_results: List[MergeResult],
                     unmatched_vcom: List[SiteInfo],
+                    fallback_resolved: List[Dict[str, Any]],
                     dry_run: bool) -> Dict[str, Any]:
     """Génère le rapport JSON."""
-    
+
     successful = [r for r in merge_results if r.success]
     failed = [r for r in merge_results if not r.success]
-    
+
     return {
         "generated_at": _now_iso(),
         "dry_run": dry_run,
@@ -417,6 +506,7 @@ def generate_report(vcom_only: List[SiteInfo],
             "merges_successful": len(successful),
             "merges_failed": len(failed),
             "vcom_unmatched": len(unmatched_vcom),
+            "clients_resolved_via_fallback": len(fallback_resolved),
         },
         "merges": [
             {
@@ -429,6 +519,7 @@ def generate_report(vcom_only: List[SiteInfo],
             for r in merge_results
         ],
         "unmatched_vcom_sites": [asdict(s) for s in unmatched_vcom],
+        "fallback_resolved": fallback_resolved,
         "pairs_found": [
             {
                 "vcom_id": m.vcom_site.id,
@@ -534,7 +625,14 @@ def run_auto_merge(
 
         for i, m in enumerate(matches_to_merge, 1):
             logger.info(f"[{i}/{len(matches_to_merge)}] Fusion VCOM {m.vcom_site.id} ← Yuman {m.yuman_site.id}...")
-            result = merge_single_pair(sb, m.vcom_site.id, m.yuman_site.id, m.yuman_site.yuman_site_id)
+            result = merge_single_pair(
+                sb,
+                m.vcom_site.id,
+                m.yuman_site.id,
+                m.yuman_site.yuman_site_id,
+                m.vcom_site.client_map_id,
+                m.yuman_site.client_map_id,
+            )
             merge_results.append(result)
 
             if result.success:
@@ -542,7 +640,30 @@ def run_auto_merge(
             else:
                 logger.error(f"         ❌ ERREUR: {result.error}")
 
-    # 5. Résumé
+    # 5. Fallback: résoudre client_map_id pour les sites VCOM sans Yuman
+    fallback_resolved: List[Dict[str, Any]] = []
+    if execute and unmatched_vcom:
+        logger.info("")
+        logger.info("=" * 70)
+        logger.info("FALLBACK: Résolution client_map_id pour sites VCOM sans Yuman")
+        logger.info("=" * 70)
+
+        # Charger le mapping région → client_map_id
+        sb_adapter = SupabaseAdapter()
+        region_to_client = _load_region_client_mapping(sb_adapter)
+        logger.info(f"  Mapping région → client: {len(region_to_client)} entrées")
+
+        # Filtrer les sites sans client_map_id
+        sites_without_client = [s for s in unmatched_vcom if not s.client_map_id]
+        logger.info(f"  Sites VCOM sans client_map_id: {len(sites_without_client)}")
+
+        if sites_without_client:
+            fallback_resolved = resolve_client_for_unmatched_vcom(
+                sb, sites_without_client, region_to_client
+            )
+            logger.info(f"  Sites résolus via fallback: {len(fallback_resolved)}")
+
+    # 6. Résumé
     logger.info("")
     logger.info("=" * 70)
     logger.info("RÉSUMÉ")
@@ -553,12 +674,14 @@ def run_auto_merge(
         failed = [r for r in merge_results if not r.success]
         logger.info(f"  Fusions réussies: {len(successful)}")
         logger.info(f"  Fusions échouées: {len(failed)}")
+        if fallback_resolved:
+            logger.info(f"  Clients résolus via fallback: {len(fallback_resolved)}")
     else:
         logger.info(f"  Fusions prévues: {len(matches_to_merge)}")
 
     logger.info(f"  Sites VCOM sans paire: {len(unmatched_vcom)}")
 
-    # 6. Envoi d'email si nécessaire
+    # 7. Envoi d'email si nécessaire
     failed_merges = [r for r in merge_results if not r.success]
     should_send_email = (unmatched_vcom or failed_merges) and (execute or test_email)
 
@@ -567,13 +690,14 @@ def run_auto_merge(
         logger.info("Envoi de l'email d'alerte...")
         send_alert_email(unmatched_vcom, merge_results, failed_merges)
 
-    # 7. Générer le rapport
+    # 8. Générer le rapport
     report = generate_report(
         vcom_only=vcom_only,
         yuman_only=yuman_only,
         matches=matches,
         merge_results=merge_results,
         unmatched_vcom=unmatched_vcom,
+        fallback_resolved=fallback_resolved,
         dry_run=not execute,
     )
 
