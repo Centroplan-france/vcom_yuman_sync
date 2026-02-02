@@ -108,6 +108,33 @@ def parse_date(date_str: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def dates_are_equal(date1: Optional[str], date2: Optional[str]) -> bool:
+    """
+    Compare deux dates ISO en les normalisant en UTC.
+
+    Gere les cas ou les dates sont dans des fuseaux horaires differents
+    (ex: UTC +00:00 vs Paris +01:00).
+
+    Returns:
+        True si les deux dates representent le meme instant, ou si les deux sont None.
+        False sinon.
+    """
+    if date1 is None and date2 is None:
+        return True
+    if date1 is None or date2 is None:
+        return False
+
+    dt1 = parse_date(date1)
+    dt2 = parse_date(date2)
+
+    if dt1 is None or dt2 is None:
+        # Fallback: comparaison string si parse echoue
+        return date1 == date2
+
+    # Comparer les timestamps UTC
+    return dt1 == dt2
+
+
 def find_best_workorder(
     workorders: List[Dict[str, Any]],
     site_id: int,
@@ -703,8 +730,8 @@ def sync_wo_changes_to_tickets(
     """
     Synchronise les changements WO vers les tickets VCOM (commentaires).
     """
-    # Recuperer tous les tickets avec un WO assigne
-    tickets_with_wo = sb.table("tickets").select("*").not_.is_("yuman_workorder_id", "null").execute()
+    # Recuperer tous les tickets avec un WO assigne (exclure les tickets fermes)
+    tickets_with_wo = sb.table("tickets").select("*").not_.is_("yuman_workorder_id", "null").neq("status", "closed").execute()
 
     if not tickets_with_wo.data:
         logger.info("Aucun ticket avec WO assigne a synchroniser")
@@ -735,7 +762,7 @@ def sync_wo_changes_to_tickets(
         # Changement de date planifiee
         old_date = ticket.get("yuman_date_planned")
         new_date = wo.get("date_planned")
-        if old_date != new_date and new_date is not None:
+        if not dates_are_equal(old_date, new_date) and new_date is not None:
             date_str = format_date(new_date)
             changes.append(f"Intervention planifiee : {date_str}")
 
