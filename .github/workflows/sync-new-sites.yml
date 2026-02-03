@@ -1,4 +1,4 @@
-name: Sync New Sites Daily
+name: 01 Sync New Sites Vcom Daily
 
 on:
   # Déclenchement quotidien à 5h UTC (7h Paris en hiver, 6h en été)
