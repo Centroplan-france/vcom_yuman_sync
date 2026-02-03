@@ -1,4 +1,4 @@
-name: Sync tickets daily
+name: 06 Sync tickets daily
 
 on:
   schedule:
