@@ -1,4 +1,4 @@
-name: Sync Supabase to Yuman Daily
+name: 04 Sync Supabase to Yuman Daily
 
 on:
   # Déclenchement quotidien à 7h15 UTC (8h15 Paris en hiver, 9h15 en été)
