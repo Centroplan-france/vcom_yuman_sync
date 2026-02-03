@@ -353,6 +353,8 @@ def upsert_tickets(sb, tickets: List[Dict[str, Any]], *, dry: bool = False) -> N
             "status": t.get("status"),
             "priority": t.get("priority"),
             "last_changed_at": t.get("lastChangedAt"),
+            "vcom_created_at": t.get("createdAt"),
+            "vcom_rectified_at": t.get("rectifiedAt"),
         }
         for t in valid_tickets
     ]
@@ -407,6 +409,8 @@ def upsert_workorders(sb, orders: List[Dict[str, Any]], *, dry: bool = False) ->
             "technician_id": w.get("technician_id"),
             "manager_id": w.get("manager_id"),
             "updated_at": datetime.now(timezone.utc).isoformat(),
+            "yuman_created_at": w.get("created_at"),
+            "date_done": w.get("date_done"),
         }
         for w in valid_orders
     ]
