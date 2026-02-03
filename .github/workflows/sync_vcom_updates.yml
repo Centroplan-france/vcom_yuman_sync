@@ -1,4 +1,4 @@
-name: Sync VCOM Updates Weekly
+name: 05 Sync VCOM Updates Weekly
 
 on:
   # Déclenchement hebdomadaire le dimanche à 11h UTC
