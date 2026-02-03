@@ -10,7 +10,7 @@
 # Planification : Tous les jours à 6h UTC (7h Paris hiver, 8h Paris été)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-name: Sync Yuman to Supabase
+name: 02 Sync Yuman to Supabase
 
 on:
   # Exécution planifiée quotidienne
