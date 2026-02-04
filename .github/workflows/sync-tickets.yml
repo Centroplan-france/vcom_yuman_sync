@@ -2,7 +2,8 @@ name: 06 Sync tickets daily
 
 on:
   schedule:
-    - cron: '0 5 * * *'   # tous les jours à 7h (UTC+2 l'été, UTC+1 l'hiver)
+    - cron: '55 10 * * *'  # 12h55 en France (UTC+2 l'été)
+    - cron: '55 17 * * *'  # 19h55 en France (UTC+2 l'été)
   workflow_dispatch:
 
 jobs:
