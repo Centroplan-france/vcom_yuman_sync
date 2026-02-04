@@ -136,67 +136,108 @@ def dates_are_equal(date1: Optional[str], date2: Optional[str]) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Helpers pour l'historique des dates planifiées
+# Helpers pour l'historique des workorders
 
-def append_date_history(sb, workorder_id: int, old_date, new_date) -> None:
+def append_wo_history(sb, workorder_id: int, status: str, planned_at: Optional[str]) -> None:
     """
-    Ajoute une entrée dans l'historique des changements de date_planned.
+    Ajoute une entrée dans l'historique du workorder.
 
-    Format JSON: [{from, to, changed_at}, ...]
-    - from: ancienne date (null si première planification)
-    - to: nouvelle date
+    Format JSON: [{status, planned_at, changed_at}, ...]
+    - status: statut du WO (Open, Scheduled, In progress, Closed)
+    - planned_at: date planifiée (null si pas encore planifié)
     - changed_at: timestamp du changement détecté
     """
     try:
         # Récupérer l'historique actuel
-        wo_record = sb.table("work_orders").select("date_planned_history").eq("workorder_id", workorder_id).single().execute()
+        wo_record = sb.table("work_orders").select("wo_history").eq("workorder_id", workorder_id).single().execute()
 
-        history = wo_record.data.get("date_planned_history") or []
+        history = wo_record.data.get("wo_history") or []
 
         # Ajouter la nouvelle entrée
         history.append({
-            "from": old_date,
-            "to": new_date,
+            "status": status,
+            "planned_at": planned_at,
             "changed_at": datetime.now(timezone.utc).isoformat()
         })
 
         # Mettre à jour
         sb.table("work_orders").update({
-            "date_planned_history": history
+            "wo_history": history
         }).eq("workorder_id", workorder_id).execute()
 
-        logger.info("Historique date_planned mis à jour pour WO %s: %s -> %s", workorder_id, old_date, new_date)
+        logger.info("Historique WO mis à jour pour WO %s: status=%s, planned_at=%s", workorder_id, status, planned_at)
 
     except Exception as exc:
-        logger.error("Echec mise à jour historique date WO %s: %s", workorder_id, exc)
+        logger.error("Echec mise à jour historique WO %s: %s", workorder_id, exc)
 
 
-def format_date_history_for_comment(history: list) -> str:
+def format_wo_history_for_comment(history: list) -> str:
     """
-    Formate l'historique des dates pour un commentaire VCOM lisible.
+    Formate l'historique du workorder pour un commentaire VCOM lisible.
+
+    Gère à la fois la nouvelle structure (status, planned_at, changed_at)
+    et l'ancienne structure (from, to, changed_at) pour compatibilité.
 
     Exemple de sortie:
-    📅 Historique des planifications :
-      • 10/01/2025 : Planifié pour le 15/01/2025
-      • 18/01/2025 : Déplacé du 15/01/2025 au 20/01/2025
+    📅 Historique du workorder :
+      • 15/01/2026 : Créé (Open)
+      • 15/01/2026 : Planifié pour le 11/02/2026
+      • 10/02/2026 : Reporté au 18/02/2026
+      • 18/02/2026 : Intervention démarrée
+      • 18/02/2026 : Clôturé
     """
     if not history:
         return ""
 
-    lines = ["", "📅 Historique des planifications :"]
+    lines = ["", "📅 Historique du workorder :"]
 
-    for entry in history:
+    prev_status = None
+    prev_planned_at = None
+
+    for i, entry in enumerate(history):
         changed_at = format_date(entry.get("changed_at"))
-        to_date = format_date(entry.get("to"))
-        from_date = entry.get("from")
 
-        if from_date is None:
-            # Première planification
-            lines.append(f"  • {changed_at} : Planifié pour le {to_date}")
+        # Détecter si c'est l'ancien format (from/to) ou le nouveau (status/planned_at)
+        if "status" in entry:
+            # Nouveau format
+            status = entry.get("status")
+            planned_at = entry.get("planned_at")
+
+            if i == 0:
+                # Première entrée = création
+                if planned_at:
+                    lines.append(f"  • {changed_at} : Créé ({status}), planifié pour le {format_date(planned_at)}")
+                else:
+                    lines.append(f"  • {changed_at} : Créé ({status})")
+            else:
+                # Entrées suivantes = changements
+                status_changed = status != prev_status
+                date_changed = planned_at != prev_planned_at
+
+                if status_changed and status.lower() == "closed":
+                    lines.append(f"  • {changed_at} : Clôturé")
+                elif status_changed and status.lower() == "in progress":
+                    lines.append(f"  • {changed_at} : Intervention démarrée")
+                elif date_changed and planned_at:
+                    if prev_planned_at:
+                        lines.append(f"  • {changed_at} : Reporté au {format_date(planned_at)}")
+                    else:
+                        lines.append(f"  • {changed_at} : Planifié pour le {format_date(planned_at)}")
+                elif status_changed:
+                    lines.append(f"  • {changed_at} : Statut changé en {status}")
+
+            prev_status = status
+            prev_planned_at = planned_at
         else:
-            # Déplacement
-            from_date_str = format_date(from_date)
-            lines.append(f"  • {changed_at} : Déplacé du {from_date_str} au {to_date}")
+            # Ancien format (compatibilité)
+            to_date = format_date(entry.get("to"))
+            from_date = entry.get("from")
+
+            if from_date is None:
+                lines.append(f"  • {changed_at} : Planifié pour le {to_date}")
+            else:
+                from_date_str = format_date(from_date)
+                lines.append(f"  • {changed_at} : Déplacé du {from_date_str} au {to_date}")
 
     return "\n".join(lines)
 
@@ -313,7 +354,7 @@ def get_vysync_comment(vc, ticket_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def update_vysync_comment(sb, vc, ticket: Dict[str, Any], wo: Dict[str, Any], changes: List[str], *, date_history: list = None, dry: bool = False) -> None:
+def update_vysync_comment(sb, vc, ticket: Dict[str, Any], wo: Dict[str, Any], changes: List[str], *, wo_history: list = None, dry: bool = False) -> None:
     """Met a jour ou cree le commentaire VYSYNC avec l'historique."""
     ticket_id = ticket["vcom_ticket_id"]
     wo_number = wo.get("number", wo["id"])
@@ -322,9 +363,9 @@ def update_vysync_comment(sb, vc, ticket: Dict[str, Any], wo: Dict[str, Any], ch
     # Nouvelle entree
     new_entry = f"{today} :\n" + "\n".join(f"* {c}" for c in changes)
 
-    # Ajouter l'historique des dates si plusieurs changements
-    if date_history and len(date_history) > 1:
-        new_entry += "\n" + format_date_history_for_comment(date_history)
+    # Ajouter l'historique du WO si plusieurs changements
+    if wo_history and len(wo_history) > 1:
+        new_entry += "\n" + format_wo_history_for_comment(wo_history)
 
     # Recuperer le commentaire existant
     existing = get_vysync_comment(vc, ticket_id)
@@ -680,19 +721,32 @@ def _create_new_workorder_for_tickets(
         wo_id = res["id"]
         wo_number = res.get("number", wo_id)
 
-        # Inserer le WO en base
+        # Initialiser wo_history avec l'entrée de création
+        initial_status = res.get("status") or "Open"
+        initial_date_planned = res.get("date_planned")
+        yuman_created_at = res.get("created_at") or datetime.now(timezone.utc).isoformat()
+
+        initial_wo_history = [{
+            "status": initial_status,
+            "planned_at": initial_date_planned,
+            "changed_at": yuman_created_at
+        }]
+
+        # Inserer le WO en base avec wo_history initialisé
         sb.table("work_orders").insert({
             "workorder_id": wo_id,
-            "status": res.get("status"),
+            "status": initial_status,
             "client_id": res.get("client_id"),
             "site_id": site_id,
             "scheduled_date": res.get("date_planned"),
-            "date_planned": res.get("date_planned"),
+            "date_planned": initial_date_planned,
             "description": res.get("description"),
             "title": res.get("title"),
             "category_id": CATEGORY_SAV_CURATIVE,
             "workorder_type": WO_TYPE_REACTIVE,
             "manager_id": MANAGER_ID_ANTHONY,
+            "yuman_created_at": yuman_created_at,
+            "wo_history": initial_wo_history,
         }).execute()
 
         # Assigner les tickets a ce WO
@@ -842,46 +896,52 @@ def sync_wo_changes_to_tickets(
         new_date = wo.get("date_planned")
         date_changed = not dates_are_equal(old_date, new_date) and new_date is not None
 
+        # Changement de status
+        old_status = ticket.get("yuman_wo_status") or ""
+        new_status = wo.get("status") or ""
+        status_changed = old_status.lower() != new_status.lower()
+
         if date_changed:
             date_str = format_date(new_date)
             changes.append(f"Intervention planifiee : {date_str}")
 
-            # Enregistrer dans l'historique du WO (une seule fois par WO)
-            if wo_id not in wo_history_updated:
-                if not dry:
-                    append_date_history(sb, wo_id, old_date, new_date)
-                    wo_history_updated.add(wo_id)
-                else:
-                    logger.info("[DRY] Historique date WO %s: %s -> %s", wo_id, old_date, new_date)
-                    wo_history_updated.add(wo_id)
-
-        # Changement de status (notamment cloture)
-        old_status = ticket.get("yuman_wo_status") or ""
-        new_status = wo.get("status") or ""
-        if old_status.lower() != new_status.lower():
+        if status_changed:
             if new_status.lower() == "closed":
                 date_done = wo.get("date_done") or datetime.now().isoformat()
                 changes.append(f"WO cloture le {format_date(date_done)}")
+            elif new_status.lower() == "in progress":
+                changes.append("Intervention demarree")
+            else:
+                changes.append(f"Statut WO : {new_status}")
+
+        # Enregistrer dans l'historique du WO si statut ou date a changé (une seule fois par WO)
+        if (status_changed or date_changed) and wo_id not in wo_history_updated:
+            if not dry:
+                append_wo_history(sb, wo_id, new_status, new_date)
+                wo_history_updated.add(wo_id)
+            else:
+                logger.info("[DRY] Historique WO %s: status=%s, planned_at=%s", wo_id, new_status, new_date)
+                wo_history_updated.add(wo_id)
 
         if not changes:
             continue  # Rien n'a change
 
-        # Recuperer l'historique des dates pour l'inclure dans le commentaire
-        date_history = []
+        # Recuperer l'historique du WO pour l'inclure dans le commentaire
+        wo_history = []
         if not dry:
             try:
-                wo_record = sb.table("work_orders").select("date_planned_history").eq("workorder_id", wo_id).single().execute()
-                date_history = wo_record.data.get("date_planned_history") or []
+                wo_record = sb.table("work_orders").select("wo_history").eq("workorder_id", wo_id).single().execute()
+                wo_history = wo_record.data.get("wo_history") or []
             except Exception:
                 pass  # Pas grave si on n'arrive pas à récupérer l'historique
 
         # Mettre a jour le commentaire VYSYNC (avec historique si disponible)
         if dry:
             logger.info("[DRY] Changements detectes pour ticket %s: %s", ticket["vcom_ticket_id"], changes)
-            if date_history and len(date_history) > 1:
-                logger.info("[DRY] Historique dates: %s", date_history)
+            if wo_history and len(wo_history) > 1:
+                logger.info("[DRY] Historique WO: %s", wo_history)
         else:
-            update_vysync_comment(sb, vc, ticket, wo, changes, date_history=date_history, dry=dry)
+            update_vysync_comment(sb, vc, ticket, wo, changes, wo_history=wo_history, dry=dry)
 
         # Si cloture, poster aussi le report
         if new_status.lower() == "closed" and old_status.lower() != new_status.lower():
