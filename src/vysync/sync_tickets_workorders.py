@@ -500,6 +500,11 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
                 if wo_id in tickets_by_wo and not dry:
                     _update_vcom_comments_for_wo(sb, vc, wo_id, w, wo_history, tickets_by_wo[wo_id])
 
+                    # Poster le rapport d'intervention si cloture
+                    if status_changed and new_status.lower() == "closed":
+                        for ticket in tickets_by_wo[wo_id]:
+                            post_report_comment(vc, yc, ticket, w)
+
         rows_to_upsert.append(row)
 
     # Upsert en batch
