@@ -3,7 +3,7 @@ from __future__ import annotations
 """
 Dataclasses métier : Site, Equipment, Client
 La clé de comparaison d'un Equipment est désormais **un simple string** :
-        key()  ->  vcom_device_id
+        key()  ->  serial_number
 """
 
 from dataclasses import dataclass, asdict
@@ -55,7 +55,7 @@ class Equipment:
     category_id: int
     eq_type: str
     name: str
-    site_id: Optional[int] | None = None
+    site_id: Optional[int] = None
     yuman_material_id: Optional[int] = None
     vcom_device_id: Optional[str] = None
     brand: Optional[str] = None
