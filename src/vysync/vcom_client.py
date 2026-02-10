@@ -14,7 +14,7 @@ import requests
 try:                              # optional .env
     from dotenv import load_dotenv
     load_dotenv()
-except Exception:
+except ImportError:
     pass
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ class VCOMAPIClient:
     # ------------------------------------------------------------------ #
     # Constructeur                                                       #
     # ------------------------------------------------------------------ #
-    def __init__(self, log_level: int = logging.INFO) -> None:
+    def __init__(self, log_level: int = logging.INFO, timeout: int = 30) -> None:
         self.api_key   = os.getenv("VCOM_API_KEY")
         self.username  = os.getenv("VCOM_USERNAME")
         self.password  = os.getenv("VCOM_PASSWORD")
@@ -59,10 +59,19 @@ class VCOMAPIClient:
         self._req_ts_day: List[float] = []     # appels des 24 h dernières
         self._last_request = 0.0
         self._consecutive_errors = 0
-        self.timeout = 30
+        self.timeout = timeout
 
         logger.setLevel(log_level)
         logger.info("VCOM client initialised")
+
+    # ------------------------------------------------------------------ #
+    # Context manager                                                     #
+    # ------------------------------------------------------------------ #
+    def __enter__(self) -> "VCOMAPIClient":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.session.close()
 
     # ------------------------------------------------------------------ #
     # Validation                                                          #
@@ -226,7 +235,7 @@ class VCOMAPIClient:
             self._make_request("GET", "/session")
             logger.info("VCOM connectivity OK")
             return True
-        except Exception as exc:
+        except requests.RequestException as exc:
             logger.error("Connectivity test failed: %s", exc)
             return False
 
