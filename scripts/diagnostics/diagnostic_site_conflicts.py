@@ -28,7 +28,6 @@ Output:
 
 import os
 import json
-import re
 from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Dict, List, Tuple, Optional, Any
@@ -100,29 +99,7 @@ class PotentialMatch:
 # FONCTIONS UTILITAIRES
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def normalize_name(name: str) -> str:
-    """
-    Normalise un nom de site pour la comparaison.
-    - Minuscules
-    - Supprime les caractères spéciaux
-    - Supprime les suffixes courants (région entre parenthèses, etc.)
-    """
-    if not name:
-        return ""
-    
-    # Minuscules
-    n = name.lower().strip()
-    
-    # Supprimer le contenu entre parenthèses (souvent la région)
-    n = re.sub(r'\([^)]*\)', '', n)
-    
-    # Supprimer les caractères spéciaux sauf espaces
-    n = re.sub(r'[^a-z0-9\s]', ' ', n)
-    
-    # Normaliser les espaces
-    n = ' '.join(n.split())
-    
-    return n
+from vysync.utils import normalize_name
 
 
 def calculate_similarity(name1: str, name2: str) -> float:

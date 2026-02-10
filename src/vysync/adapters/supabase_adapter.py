@@ -12,12 +12,10 @@ from typing import Dict, Optional
 
 from supabase import create_client, Client as SupabaseClient
 from vysync.diff import _is_missing
+from vysync.utils import norm_serial as _norm_serial
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-def _norm_serial(s: str | None) -> str:
-    return (s or "").strip().upper()
 
 from vysync.models import (
     Site,

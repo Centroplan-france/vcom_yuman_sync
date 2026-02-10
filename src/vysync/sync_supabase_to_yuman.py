@@ -60,11 +60,7 @@ from vysync.models import (
 # UTILITAIRES
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def normalize_site_name(name: str) -> str:
-    """Normalise un nom de site en enlevant le préfixe numérique, 'France' et le suffixe entre parenthèses."""
-    if not name:
-        return ""
-    return re.sub(r'^\d+\s+|\s*\(.*?\)| France', '', name).strip()
+from vysync.utils import normalize_site_name
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

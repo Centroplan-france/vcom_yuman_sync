@@ -5,7 +5,6 @@ alors qu'ils n'ont pas de changements visibles.
 """
 
 import sys
-import re
 from dataclasses import fields, replace
 
 sys.path.insert(0, "/workspaces/vcom_yuman_sync/src")
@@ -14,10 +13,7 @@ from vysync.adapters.supabase_adapter import SupabaseAdapter
 from vysync.adapters.yuman_adapter import YumanAdapter
 from vysync.models import Site
 
-def normalize_site_name(name: str) -> str:
-    if not name:
-        return ""
-    return re.sub(r'^\d+\s+|\s*\(.*?\)| France', '', name).strip()
+from vysync.utils import normalize_site_name
 
 # Sites ALDI suspects (avec changes: {} dans le rapport)
 SUSPECT_SITES = [
