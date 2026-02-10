@@ -27,6 +27,7 @@ jobs:
   sync:
     name: Sync Yuman → Supabase
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     
     steps:
       - name: Checkout repo
