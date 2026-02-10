@@ -510,7 +510,6 @@ class SupabaseAdapter:
         """
         # INSERT / UPSERT des nouveaux clients
         for client in patch.add:
-            print(type(client), client)
             row = client.to_dict()
             # garantir un created_at
             row.setdefault(
