@@ -11,6 +11,7 @@ Le résultat est un PatchSet (add, update, delete) sérialisable.
 from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, Generic, List, Tuple, TypeVar, NamedTuple, Optional, Set
 from vysync.models import Site, Equipment, CAT_MODULE, CAT_STRING, CAT_INVERTER, CAT_CENTRALE, CAT_SIM
+from vysync.utils import normalize_site_name as _normalize_site_name
 import logging
 import re
 
@@ -78,10 +79,10 @@ def _equals(a: T, b: T, ignore_fields: Optional[set[str]] = None) -> bool:
                     for field in ignore_fields:
                         d.pop(field, None)
 
-                # normaliser name   clean_new_name = re.sub(r'^\d+\s+|\s*\(.*?\)| France', '', new.name)
+                # normaliser name
                 n = d.get("name")
                 if n is not None:
-                    d["name"] = re.sub(r'^\d+\s+|\s*\(.*?\)| France', '', n)
+                    d["name"] = _normalize_site_name(n)
 
                 # normaliser commission_date  (ex. 29/04/2025 → 2025-04-29)  
                 cd = d.get("commission_date")

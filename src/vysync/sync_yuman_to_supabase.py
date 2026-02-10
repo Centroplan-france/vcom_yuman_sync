@@ -77,9 +77,7 @@ def _is_empty(value: Any) -> bool:
     return False
 
 
-def _norm_serial(s: str | None) -> str:
-    """Normalise un serial_number (strip + upper)."""
-    return (s or "").strip().upper()
+from vysync.utils import norm_serial as _norm_serial
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

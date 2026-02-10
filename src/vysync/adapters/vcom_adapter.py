@@ -15,9 +15,7 @@ from vysync.inverter_parser import parse_vcom_inverter_name
 logger = logging.getLogger(__name__)
 
 
-def _norm_serial(s: str | None) -> str:
-    """Normalise un serial_number : strip + majuscules."""
-    return (s or "").strip().upper()
+from vysync.utils import norm_serial as _norm_serial
 
 
 def build_address(addr: Dict[str, Any]) -> str | None:

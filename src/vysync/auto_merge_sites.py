@@ -127,16 +127,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def normalize_name(name: str) -> str:
-    """Normalise un nom de site pour la comparaison."""
-    import re
-    if not name:
-        return ""
-    n = name.lower().strip()
-    n = re.sub(r'\([^)]*\)', '', n)  # Supprimer parenthèses
-    n = re.sub(r'[^a-z0-9\s]', ' ', n)  # Caractères spéciaux
-    n = ' '.join(n.split())
-    return n
+from vysync.utils import normalize_name
 
 
 def calculate_similarity(name1: str, name2: str) -> float:
