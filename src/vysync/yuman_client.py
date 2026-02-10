@@ -291,7 +291,7 @@ class YumanClient:  # pylint: disable=too-many-public-methods
     # Utilitaires                                                        #
     # ------------------------------------------------------------------ #
 
-    def get_category_id(self) -> Optional[int]:
+    def get_category_id(self) -> List[Dict[str, Any]]:
         return self._get("materials/categories")
             
     
