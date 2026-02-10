@@ -505,6 +505,11 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
                         for ticket in tickets_by_wo[wo_id]:
                             post_report_comment(vc, yc, ticket, w)
 
+            else:
+                # Aucun changement detecte -> ne pas upsert ce WO
+                # (sinon le batch upsert ecraserait wo_history avec NULL)
+                continue
+
         rows_to_upsert.append(row)
 
     # Upsert en batch
