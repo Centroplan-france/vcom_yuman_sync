@@ -162,8 +162,8 @@ def send_conflict_email(conflicts: List[Dict[str, Any]]) -> bool:
         logger.info("[MAIL] Email envoyé à %s (%d conflits)", ALERT_EMAIL, len(conflicts))
         return True
         
-    except Exception as e:
-        logger.error("[MAIL] Erreur envoi email: %s", e)
+    except smtplib.SMTPException as e:
+        logger.error("[MAIL] Erreur envoi email: %s", e, exc_info=True)
         logger.info("[MAIL] Contenu du mail:")
         for line in body_lines:
             logger.info("[MAIL]   %s", line)
@@ -243,8 +243,8 @@ def sync_clients(
             logger.debug("[CLIENTS] INSERT yuman_client_id=%d name=%s", 
                         row["yuman_client_id"], row["name"])
         except Exception as e:
-            logger.error("[CLIENTS] ERREUR INSERT yuman_client_id=%d: %s", 
-                        row["yuman_client_id"], e)
+            logger.error("[CLIENTS] ERREUR INSERT yuman_client_id=%d: %s",
+                        row["yuman_client_id"], e, exc_info=True)
     
     # 5) Apply UPDATEs
     for upd in to_update:
@@ -255,8 +255,8 @@ def sync_clients(
             logger.debug("[CLIENTS] UPDATE yuman_client_id=%d: %s", 
                         upd["yuman_client_id"], upd["changes"])
         except Exception as e:
-            logger.error("[CLIENTS] ERREUR UPDATE yuman_client_id=%d: %s", 
-                        upd["yuman_client_id"], e)
+            logger.error("[CLIENTS] ERREUR UPDATE yuman_client_id=%d: %s",
+                        upd["yuman_client_id"], e, exc_info=True)
     
     return {
         "yuman_count": len(y_clients_raw),
@@ -408,8 +408,8 @@ def sync_sites(
             logger.info("[SITES] INSERT yuman_site_id=%d name=%s", 
                        row["yuman_site_id"], row["name"])
         except Exception as e:
-            logger.error("[SITES] ERREUR INSERT yuman_site_id=%d: %s", 
-                        row["yuman_site_id"], e)
+            logger.error("[SITES] ERREUR INSERT yuman_site_id=%d: %s",
+                        row["yuman_site_id"], e, exc_info=True)
     
     # 5) Apply UPDATEs
     for upd in to_update:
@@ -420,8 +420,8 @@ def sync_sites(
             logger.debug("[SITES] UPDATE site_id=%d yuman_site_id=%d: %s", 
                         upd["site_id"], upd["yuman_site_id"], upd["changes"])
         except Exception as e:
-            logger.error("[SITES] ERREUR UPDATE site_id=%d: %s", 
-                        upd["site_id"], e)
+            logger.error("[SITES] ERREUR UPDATE site_id=%d: %s",
+                        upd["site_id"], e, exc_info=True)
     
     # 6) Envoyer mail si conflits
     if conflicts:
@@ -542,7 +542,7 @@ def sync_equipments(
         except Exception as e:
             logger.error(
                 "[EQUIPS] ERREUR update yuman_material_id serial=%s: %s",
-                upd["serial_number"], e
+                upd["serial_number"], e, exc_info=True
             )
     
     # 6) Appliquer les updates SIM (brand/model)
@@ -560,7 +560,7 @@ def sync_equipments(
         except Exception as e:
             logger.error(
                 "[EQUIPS] ERREUR update SIM serial=%s: %s",
-                upd["serial_number"], e
+                upd["serial_number"], e, exc_info=True
             )
     
     return {

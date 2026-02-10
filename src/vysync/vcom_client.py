@@ -14,7 +14,7 @@ import requests
 try:                              # optional .env
     from dotenv import load_dotenv
     load_dotenv()
-except Exception:
+except ImportError:
     pass
 
 logger = logging.getLogger(__name__)

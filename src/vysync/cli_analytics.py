@@ -88,7 +88,7 @@ def upsert_monthly_analytics(
             .execute()
         existing = result.data
     except Exception:
-        pass  # Pas de données existantes
+        logger.debug("No existing analytics for site_id=%d month=%s", site_id, month)
 
     # 2. Fusionner : ne jamais écraser avec NULL
     fields = [
@@ -137,7 +137,7 @@ def upsert_monthly_analytics(
         logger.info("✓ Upsert analytics site_id=%d month=%s", site_id, month)
     except Exception as exc:
         logger.error("✗ Échec upsert analytics site_id=%d month=%s: %s",
-                    site_id, month, exc)
+                    site_id, month, exc, exc_info=True)
 
 
 # ────────────────────────── Synchronization Logic ────────────────────────────
@@ -197,7 +197,7 @@ def sync_site_analytics(
 
         except Exception as exc:
             logger.error("Erreur lors du traitement de %s %d-%02d: %s",
-                        system_key, year, month, exc)
+                        system_key, year, month, exc, exc_info=True)
             error_count += 1
 
     logger.info("Terminé %s: %d succès, %d erreurs",
@@ -278,7 +278,7 @@ def sync_all_sites_historical(
                 for m in range(start_month, end_month + 1):
                     all_months_needed.add((year, m))
 
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             logger.warning("Erreur parsing commission_date pour %s: %s", system_key, exc)
 
     if not all_months_needed:
@@ -390,7 +390,7 @@ def sync_all_sites_historical(
             processed += 1
 
         except Exception as exc:
-            logger.error("Erreur lors du traitement du site %s: %s", system_key, exc)
+            logger.error("Erreur lors du traitement du site %s: %s", system_key, exc, exc_info=True)
             skipped += 1
 
     logger.info("")
@@ -482,7 +482,7 @@ def sync_all_sites_last_month(
                     logger.info("Site pas encore en service le mois dernier → skip")
                     skipped += 1
                     continue
-            except Exception as exc:
+            except (ValueError, TypeError) as exc:
                 logger.warning("Erreur parsing commission_date: %s", exc)
 
         # Récupérer meter_id avec cache
@@ -499,7 +499,7 @@ def sync_all_sites_last_month(
             processed += 1
 
         except Exception as exc:
-            logger.error("Erreur lors du traitement du site %s: %s", system_key, exc)
+            logger.error("Erreur lors du traitement du site %s: %s", system_key, exc, exc_info=True)
             skipped += 1
 
     logger.info("")

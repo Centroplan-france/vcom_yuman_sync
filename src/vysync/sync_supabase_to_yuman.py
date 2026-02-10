@@ -167,7 +167,7 @@ def sync_supabase_to_yuman(
         y = YumanAdapter(sb)
         logger.info("Adaptateurs initialisés")
     except Exception as e:
-        logger.error("Erreur initialisation: %s", e)
+        logger.error("Erreur initialisation: %s", e, exc_info=True)
         report["errors"].append({"phase": "init", "error": str(e)})
         report["success"] = False
         return report
@@ -249,7 +249,7 @@ def sync_supabase_to_yuman(
         report["equipments"]["before"] = len(sb_equips)
         
     except Exception as e:
-        logger.error("Erreur Phase 1: %s", e)
+        logger.error("Erreur Phase 1: %s", e, exc_info=True)
         report["errors"].append({"phase": "phase1", "error": str(e)})
         report["success"] = False
         return report
@@ -292,7 +292,7 @@ def sync_supabase_to_yuman(
         print(f"  {C.GREEN}✓ {len(y_equips)} équipements{C.END}")
         
     except Exception as e:
-        logger.error("Erreur Phase 2: %s", e)
+        logger.error("Erreur Phase 2: %s", e, exc_info=True)
         report["errors"].append({"phase": "phase2", "error": str(e)})
         report["success"] = False
         return report
@@ -433,7 +433,7 @@ def sync_supabase_to_yuman(
             })
 
     except Exception as e:
-        logger.error("Erreur Phase 3: %s", e)
+        logger.error("Erreur Phase 3: %s", e, exc_info=True)
         report["errors"].append({"phase": "phase3", "error": str(e)})
         report["success"] = False
         return report
@@ -522,7 +522,7 @@ def sync_supabase_to_yuman(
             logger.info("Sites patch appliqué avec succès")
             print(f"  {C.GREEN}✓ Sites mis à jour{C.END}")
         except Exception as e:
-            logger.error("Erreur application sites: %s", e)
+            logger.error("Erreur application sites: %s", e, exc_info=True)
             print(f"  {C.RED}✗ Erreur: {e}{C.END}")
             report["errors"].append({"phase": "apply_sites", "error": str(e)})
             report["success"] = False
@@ -539,7 +539,7 @@ def sync_supabase_to_yuman(
             logger.info("Équipements patch appliqué avec succès")
             print(f"  {C.GREEN}✓ Équipements mis à jour{C.END}")
         except Exception as e:
-            logger.error("Erreur application équipements: %s", e)
+            logger.error("Erreur application équipements: %s", e, exc_info=True)
             print(f"  {C.RED}✗ Erreur: {e}{C.END}")
             report["errors"].append({"phase": "apply_equips", "error": str(e)})
             report["success"] = False
@@ -609,7 +609,7 @@ def sync_supabase_to_yuman(
             print(f"    Équipements: +{len(patch_equips_after.add)} ~{len(patch_equips_after.update)} -{len(patch_equips_after.delete)}")
 
     except Exception as e:
-        logger.error("Erreur vérification: %s", e)
+        logger.error("Erreur vérification: %s", e, exc_info=True)
         print(f"  {C.YELLOW}⚠️  Vérification échouée: {e}{C.END}")
         report["errors"].append({"phase": "verification", "error": str(e)})
     

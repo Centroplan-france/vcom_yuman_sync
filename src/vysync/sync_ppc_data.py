@@ -19,6 +19,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional
 
+import requests
+
 from vysync.vcom_client import VCOMAPIClient
 from vysync.adapters.supabase_adapter import SupabaseAdapter
 
@@ -188,8 +190,8 @@ def fetch_ppc_setpoint(
             }
         }
 
-    except Exception as e:
-        logger.error("Error fetching PPC data for site %s: %s", system_key, e)
+    except (requests.RequestException, KeyError, ValueError) as e:
+        logger.error("Error fetching PPC data for site %s: %s", system_key, e, exc_info=True)
         return {"status": "error", "error": str(e)}
 
 
@@ -256,7 +258,7 @@ def update_site_ppc_data(
             logger.error("Site %d: Unknown PPC data status: %s", site_id, status)
 
     except Exception as e:
-        logger.error("Failed to update site %d PPC data: %s", site_id, e)
+        logger.error("Failed to update site %d PPC data: %s", site_id, e, exc_info=True)
         raise
 
 
@@ -281,7 +283,7 @@ def sync_all_sites() -> None:
         vc = VCOMAPIClient()
         sb = SupabaseAdapter()
     except Exception as e:
-        logger.error("Failed to initialize clients: %s", e)
+        logger.error("Failed to initialize clients: %s", e, exc_info=True)
         raise
 
     # Récupérer tous les sites avec vcom_system_key
@@ -293,7 +295,7 @@ def sync_all_sites() -> None:
 
         sites = result.data
     except Exception as e:
-        logger.error("Failed to fetch sites from database: %s", e)
+        logger.error("Failed to fetch sites from database: %s", e, exc_info=True)
         raise
 
     if not sites:
@@ -339,7 +341,7 @@ def sync_all_sites() -> None:
             logger.info("-" * 70)
 
         except Exception as e:
-            logger.error("Error processing site %d (%s): %s", site_id, system_key, e)
+            logger.error("Error processing site %d (%s): %s", site_id, system_key, e, exc_info=True)
             error_count += 1
             logger.info("-" * 70)
 
@@ -375,7 +377,7 @@ def main() -> None:
     try:
         sync_all_sites()
     except Exception as e:
-        logger.error("Fatal error during PPC sync: %s", e)
+        logger.error("Fatal error during PPC sync: %s", e, exc_info=True)
         raise
 
 

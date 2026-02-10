@@ -23,6 +23,7 @@ import textwrap
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
+import requests
 from supabase import create_client
 from vysync.vcom_client import VCOMAPIClient
 from vysync.yuman_client import YumanClient
@@ -95,7 +96,7 @@ def format_date(date_str: Optional[str]) -> str:
         else:
             dt = date_str
         return dt.strftime("%d/%m/%Y")
-    except Exception:
+    except (ValueError, TypeError):
         return str(date_str)[:10]
 
 
@@ -105,7 +106,7 @@ def parse_date(date_str: Optional[str]) -> Optional[datetime]:
         return None
     try:
         return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-    except Exception:
+    except (ValueError, TypeError):
         return None
 
 
@@ -257,7 +258,7 @@ def enrich_workorder_description(
         logger.info("Workorder %s enrichi avec %d ticket(s)", wo["id"], len(tickets))
         return True
     except Exception as exc:
-        logger.error("Echec enrichissement workorder %s: %s", wo["id"], exc)
+        logger.error("Echec enrichissement workorder %s: %s", wo["id"], exc, exc_info=True)
         return False
 
 
@@ -289,8 +290,8 @@ Duree : {time_taken} minutes
         try:
             vc.create_ticket_comment(ticket_id, content)
             logger.info("Rapport poste pour ticket %s", ticket_id)
-        except Exception as exc:
-            logger.error("Echec post rapport ticket %s: %s", ticket_id, exc)
+        except requests.RequestException as exc:
+            logger.error("Echec post rapport ticket %s: %s", ticket_id, exc, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -555,8 +556,8 @@ def _update_vcom_comments_for_wo(sb, vc, wo_id: int, wo: Dict, wo_history: list,
                         "last_sync_at": datetime.now(timezone.utc).isoformat()
                     }).eq("vcom_ticket_id", ticket_id).execute()
                 logger.info("Commentaire VYSYNC cree pour ticket %s", ticket_id)
-        except Exception as exc:
-            logger.error("Echec commentaire VCOM ticket %s: %s", ticket_id, exc)
+        except requests.RequestException as exc:
+            logger.error("Echec commentaire VCOM ticket %s: %s", ticket_id, exc, exc_info=True)
 
 
 def _format_wo_history_as_comment(wo_number, history: list) -> str:
@@ -597,7 +598,7 @@ def _format_wo_history_as_comment(wo_number, history: list) -> str:
         try:
             dt = datetime.fromisoformat(changed_at.replace("Z", "+00:00").replace(" ", "T"))
             date_key = dt.strftime("%d/%m/%Y")
-        except Exception:
+        except (ValueError, TypeError):
             date_key = changed_at[:10]
 
         # Determiner les changements par rapport a l'entree precedente
@@ -663,7 +664,7 @@ def _format_date(date_str) -> str:
         else:
             dt = date_str
         return dt.strftime("%d/%m/%Y")
-    except Exception:
+    except (ValueError, TypeError):
         return str(date_str)[:10]
 
 
@@ -678,8 +679,8 @@ def collect_vcom_tickets(vc, statuses: List[str] | None = None) -> List[Dict[str
             chunk = vc.get_tickets(status=st)
             tickets.extend(chunk)
             logger.info("VCOM: %d tickets recuperes (status=%s)", len(chunk), st)
-        except Exception as exc:
-            logger.error("Erreur recuperation tickets VCOM (%s): %s", st, exc)
+        except requests.RequestException as exc:
+            logger.error("Erreur recuperation tickets VCOM (%s): %s", st, exc, exc_info=True)
     return tickets
 
 
@@ -691,8 +692,8 @@ def collect_yuman_workorders(yc) -> List[Dict[str, Any]]:
         data = yc.list_workorders()
         logger.info("YUMAN: %d workorders recuperes", len(data))
         return data
-    except Exception as exc:
-        logger.error("Erreur recuperation workorders Yuman: %s", exc)
+    except requests.RequestException as exc:
+        logger.error("Erreur recuperation workorders Yuman: %s", exc, exc_info=True)
         return []
 
 
@@ -780,7 +781,7 @@ def assign_urgent_high_tickets(
                     }).eq("vcom_ticket_id", tid).execute()
                     logger.info("Ticket %s assigne au WO %s", tid, wo["id"])
                 except Exception as exc:
-                    logger.error("Echec assignation ticket %s: %s", tid, exc)
+                    logger.error("Echec assignation ticket %s: %s", tid, exc, exc_info=True)
         else:
             # Aucun WO SAV Reactive eligible -> creer un nouveau WO
             _create_new_workorder_for_tickets(sb, vc, yc, site_id, site_tickets, dry=dry)
@@ -891,12 +892,12 @@ def _create_new_workorder_for_tickets(
                     "last_sync_at": datetime.now(timezone.utc).isoformat()
                 }).eq("vcom_ticket_id", tid).execute()
             except Exception as exc:
-                logger.error("Echec assignation ticket %s: %s", tid, exc)
+                logger.error("Echec assignation ticket %s: %s", tid, exc, exc_info=True)
 
         logger.info("Workorder #%s cree pour site %s (%d tickets)", wo_number, site_id, len(tickets))
 
     except Exception as exc:
-        logger.error("Creation WO site %s KO: %s", site_id, exc)
+        logger.error("Creation WO site %s KO: %s", site_id, exc, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -972,7 +973,7 @@ def assign_normal_tickets(
                     }).eq("vcom_ticket_id", tid).execute()
                     logger.info("Ticket %s (normal) assigne au WO %s", tid, wo["id"])
                 except Exception as exc:
-                    logger.error("Echec assignation ticket %s: %s", tid, exc)
+                    logger.error("Echec assignation ticket %s: %s", tid, exc, exc_info=True)
         else:
             # Aucun WO actif -> ignorer les tickets
             for t in site_tickets:
@@ -1061,7 +1062,7 @@ def close_tickets_of_closed_workorders(
                 }).eq("vcom_ticket_id", tid).execute()
                 logger.info("Ticket %s ferme (WO %s cloture)", tid, wo_id)
             except Exception as exc:
-                logger.error("Echec fermeture ticket %s: %s", tid, exc)
+                logger.error("Echec fermeture ticket %s: %s", tid, exc, exc_info=True)
 
         logger.info("WO %s marque Closed + %d tickets fermes", wo_id, len(tickets_to_close))
 
