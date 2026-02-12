@@ -165,6 +165,44 @@ def _get_technician_name_from_cache(tech_id: Optional[int]) -> str:
 
 
 
+def get_wo_category_name(sb, yc, category_id: int) -> str:
+    """
+    Récupère le nom d'une catégorie de WO.
+
+    1. Cherche dans la table workorder_categories
+    2. Si pas trouvé → appel API Yuman workorders/categories → insert → retourne le nom
+    3. Si tout échoue → retourne "Catégorie #{category_id}"
+    """
+    # 1. Lookup en base
+    try:
+        result = sb.table("workorder_categories").select("name").eq("id", category_id).execute()
+        if result.data:
+            return result.data[0]["name"]
+    except Exception as exc:
+        logger.warning("Erreur lecture workorder_categories pour %s: %s", category_id, exc)
+
+    # 2. Fallback API Yuman
+    try:
+        categories = yc.list_workorder_categories()
+        for cat in categories:
+            cat_id = cat.get("id")
+            cat_name = cat.get("name", "")
+            if cat_id == category_id:
+                # Insérer en base pour les prochains appels
+                try:
+                    sb.table("workorder_categories").upsert(
+                        {"id": cat_id, "name": cat_name}, on_conflict="id"
+                    ).execute()
+                except Exception as ins_exc:
+                    logger.warning("Impossible d'insérer catégorie %s en base: %s", cat_id, ins_exc)
+                return cat_name
+    except Exception as exc:
+        logger.warning("Erreur appel API workorders/categories: %s", exc)
+
+    # 3. Fallback final
+    return f"Catégorie #{category_id}"
+
+
 def find_best_workorder(
     workorders: List[Dict[str, Any]],
     site_id: int,
