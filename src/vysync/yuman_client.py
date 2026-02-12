@@ -287,6 +287,10 @@ class YumanClient:  # pylint: disable=too-many-public-methods
     def update_workorder(self, workorder_id: int, patch: Dict[str, Any]) -> Dict[str, Any]:
         return self._patch(f"workorders/{workorder_id}", patch)
 
+    def list_workorder_categories(self) -> List[Dict[str, Any]]:
+        """Récupère les catégories de workorders."""
+        return self._get("workorders/categories")
+
     # ------------------------------------------------------------------ #
     # Utilitaires                                                        #
     # ------------------------------------------------------------------ #
