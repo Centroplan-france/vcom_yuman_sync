@@ -505,9 +505,18 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
                         for ticket in tickets_by_wo[wo_id]:
                             post_report_comment(vc, yc, ticket, w)
 
+            elif existing.get("wo_history") is None:
+                # Pas de changement, mais wo_history NULL → initialiser
+                history_planned_at = None if new_status == "Open" else new_date_planned
+                row["wo_history"] = [{
+                    "status": new_status,
+                    "planned_at": history_planned_at,
+                    "technician_id": new_technician,
+                    "changed_at": w.get("created_at") or datetime.now(timezone.utc).isoformat()
+                }]
+                logger.info("WO %s sans historique -> initialisation (status=%s)", wo_id, new_status)
             else:
-                # Aucun changement detecte -> ne pas upsert ce WO
-                # (sinon le batch upsert ecraserait wo_history avec NULL)
+                # Aucun changement et wo_history existe -> ne rien faire
                 continue
 
         rows_to_upsert.append(row)
