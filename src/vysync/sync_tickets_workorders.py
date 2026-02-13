@@ -546,6 +546,28 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
                         for ticket in tickets_by_wo[wo_id]:
                             post_report_comment(vc, yc, ticket, w)
 
+                # Fermer les tickets VCOM associes au WO cloture
+                if status_changed and new_status.lower() == "closed" and wo_id in tickets_by_wo:
+                    if not dry:
+                        for ticket in tickets_by_wo[wo_id]:
+                            tid = ticket["vcom_ticket_id"]
+                            t_status = ticket.get("status", "")
+                            if t_status.lower() in ("closed", "deleted"):
+                                continue
+                            try:
+                                vc.close_ticket(tid)
+                                sb.table("tickets").update({
+                                    "status": "closed",
+                                    "last_sync_at": datetime.now(timezone.utc).isoformat()
+                                }).eq("vcom_ticket_id", tid).execute()
+                                logger.info("Ticket %s ferme (WO %s -> Closed)", tid, wo_id)
+                            except Exception as exc:
+                                logger.error("Echec fermeture ticket %s: %s", tid, exc)
+                    else:
+                        for ticket in tickets_by_wo[wo_id]:
+                            tid = ticket["vcom_ticket_id"]
+                            logger.info("[DRY] Fermeture ticket %s (WO %s -> Closed)", tid, wo_id)
+
             elif existing.get("wo_history") is None:
                 # Pas de changement, mais wo_history NULL → initialiser
                 history_planned_at = None if new_status == "Open" else new_date_planned
@@ -1069,15 +1091,10 @@ def close_tickets_of_closed_workorders(
     sb, vc, workorders: List[Dict[str, Any]], *, dry: bool = False
 ) -> None:
     """
-    Ferme les tickets VCOM dont le workorder Yuman est cloture.
-
-    Args:
-        sb: Client Supabase
-        vc: Client VCOM
-        workorders: Liste des workorders Yuman (deja recuperes)
-        dry: Mode dry-run
+    Filet de securite : ferme les tickets VCOM encore ouverts/assigned
+    dont le workorder Yuman est cloture.
+    Rattrape les cas manques par l'etape 2 (erreurs, tickets ajoutes apres coup, etc.)
     """
-    # Filtrer les WO clotures (comparaison case-insensitive)
     closed_wo_ids = [
         w["id"] for w in workorders
         if w.get("status", "").lower() == "closed"
@@ -1087,26 +1104,11 @@ def close_tickets_of_closed_workorders(
         logger.info("Aucun workorder cloture a traiter")
         return
 
-    logger.info("%d workorders clotures a verifier", len(closed_wo_ids))
+    logger.info("[Filet] %d workorders clotures a verifier", len(closed_wo_ids))
+    total_closed = 0
 
     for wo_id in closed_wo_ids:
-        # Verifier le status actuel en DB
-        res = (
-            sb.table("work_orders")
-            .select("status")
-            .eq("workorder_id", wo_id)
-            .execute()
-        )
-
-        # Si pas en DB ou deja marque closed, skip
-        if not res.data:
-            continue
-
-        db_status = res.data[0].get("status", "")
-        if db_status.lower() == "closed":
-            continue  # deja synchronise
-
-        # Recuperer les tickets lies a ce WO
+        # Chercher directement les tickets non-clos lies a ce WO
         t_rows = (
             sb.table("tickets")
             .select("vcom_ticket_id, status")
@@ -1119,20 +1121,14 @@ def close_tickets_of_closed_workorders(
             if row.get("status", "").lower() not in ("closed", "deleted")
         ]
 
-        if dry:
-            logger.info(
-                "[DRY] Cloture WO %s (status DB: %s) + %d tickets",
-                wo_id, db_status, len(tickets_to_close)
-            )
+        if not tickets_to_close:
             continue
 
-        # Mettre a jour le WO en DB
-        sb.table("work_orders").update({
-            "status": "Closed",
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }).eq("workorder_id", wo_id).execute()
+        if dry:
+            logger.info("[DRY][Filet] WO %s : %d tickets a fermer", wo_id, len(tickets_to_close))
+            total_closed += len(tickets_to_close)
+            continue
 
-        # Fermer chaque ticket VCOM
         for row in tickets_to_close:
             tid = row["vcom_ticket_id"]
             try:
@@ -1141,11 +1137,12 @@ def close_tickets_of_closed_workorders(
                     "status": "closed",
                     "last_sync_at": datetime.now(timezone.utc).isoformat()
                 }).eq("vcom_ticket_id", tid).execute()
-                logger.info("Ticket %s ferme (WO %s cloture)", tid, wo_id)
+                logger.info("[Filet] Ticket %s ferme (WO %s cloture)", tid, wo_id)
+                total_closed += 1
             except Exception as exc:
-                logger.error("Echec fermeture ticket %s: %s", tid, exc)
+                logger.error("[Filet] Echec fermeture ticket %s: %s", tid, exc)
 
-        logger.info("WO %s marque Closed + %d tickets fermes", wo_id, len(tickets_to_close))
+    logger.info("[Filet] %d tickets fermes au total", total_closed)
 
 
 # ---------------------------------------------------------------------------
