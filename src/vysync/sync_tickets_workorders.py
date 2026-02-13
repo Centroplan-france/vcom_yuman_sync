@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 # Constantes metier
 MANAGER_ID_ANTHONY = 10338
 CATEGORY_SAV_CURATIVE = 11138  # "SAV Maintenance curative"
+CATEGORY_PREVENTIVE = 13135    # "Plan de maintenance"
+CATEGORY_SAV_FUSION = 14804    # "SAV à Fusionner avec Maintenance planifiée"
+BLUEPRINT_CAMEMBERT = 3146     # Custom field "Camembert" (type multi)
 WO_TYPE_REACTIVE = "Reactive"
 WO_MAX_AGE_DAYS = 30  # Un WO avec date_planned > 30 jours dans le passe est considere obsolete
 
@@ -830,11 +833,12 @@ def assign_urgent_high_tickets(
                     logger.error("Echec assignation ticket %s: %s", tid, exc)
         else:
             # Aucun WO SAV Reactive eligible -> creer un nouveau WO
-            _create_new_workorder_for_tickets(sb, vc, yc, site_id, site_tickets, dry=dry)
+            _create_new_workorder_for_tickets(sb, vc, yc, site_id, site_tickets, workorders, dry=dry)
 
 
 def _create_new_workorder_for_tickets(
-    sb, vc, yc, site_id: int, tickets: List[Dict[str, Any]], *, dry: bool = False
+    sb, vc, yc, site_id: int, tickets: List[Dict[str, Any]],
+    workorders: List[Dict[str, Any]], *, dry: bool = False
 ) -> None:
     """Cree un nouveau WO Reactive pour un site avec des tickets prioritaires."""
     # Trier par priorite (urgent d'abord)
@@ -871,6 +875,17 @@ def _create_new_workorder_for_tickets(
 
     yuman_client_id = cli_row[0]["yuman_client_id"]
 
+    # Détecter si un WO préventif (Plan de maintenance) est ouvert ou planifié sur ce site
+    has_preventive = any(
+        w for w in workorders
+        if w.get("site_id") == site_id
+        and w.get("category_id") == CATEGORY_PREVENTIVE
+        and w.get("status", "").lower() in ("open", "scheduled")
+    )
+    wo_category = CATEGORY_SAV_FUSION if has_preventive else CATEGORY_SAV_CURATIVE
+    if has_preventive:
+        logger.info("WO préventif détecté sur site %s → catégorie SAV Fusion (%s)", site_id, wo_category)
+
     # Construire le payload
     title = tickets[0].get("designation") or tickets[0].get("id") or "Ticket VCOM"
     description = "\n".join(
@@ -878,15 +893,35 @@ def _create_new_workorder_for_tickets(
         for t in tickets
     )
 
+    # Lister les WO ouverts/planifiés sur ce site (pour info dans la description)
+    site_wos = [
+        w for w in workorders
+        if w.get("site_id") == site_id
+        and w.get("status", "").lower() in ("open", "scheduled")
+    ]
+    if site_wos:
+        description += "\n\n--- WO existants sur ce site ---"
+        for w in site_wos:
+            cat_name = get_wo_category_name(sb, yc, w.get("category_id"))
+            wo_status = (w.get("status") or "").lower()
+            if wo_status == "scheduled" and w.get("date_planned"):
+                date_str = format_date(w.get("date_planned"))
+                description += f"\nWO {cat_name} planifié le {date_str}"
+            else:
+                description += f"\nWO {cat_name} ouvert"
+
     payload = {
         "workorder_type": WO_TYPE_REACTIVE,
-        "category_id": CATEGORY_SAV_CURATIVE,
+        "category_id": wo_category,
         "title": title,
         "description": description,
         "client_id": yuman_client_id,
         "site_id": site_id,
         "address": address,
         "manager_id": MANAGER_ID_ANTHONY,
+        "fields": [
+            {"blueprint_id": BLUEPRINT_CAMEMBERT, "value": "SAV Maintenance curative"}
+        ],
         # technician_id absent -> non assigne
     }
 
@@ -919,7 +954,7 @@ def _create_new_workorder_for_tickets(
             "date_planned": res.get("date_planned"),
             "description": res.get("description"),
             "title": res.get("title"),
-            "category_id": CATEGORY_SAV_CURATIVE,
+            "category_id": wo_category,
             "workorder_type": WO_TYPE_REACTIVE,
             "manager_id": MANAGER_ID_ANTHONY,
             "yuman_created_at": yuman_created_at,
