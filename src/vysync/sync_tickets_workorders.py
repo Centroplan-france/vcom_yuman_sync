@@ -920,7 +920,7 @@ def _create_new_workorder_for_tickets(
         "address": address,
         "manager_id": MANAGER_ID_ANTHONY,
         "fields": [
-            {"blueprint_id": BLUEPRINT_CAMEMBERT, "value": "SAV Maintenance curative"}
+            {"blueprint_id": BLUEPRINT_CAMEMBERT, "value": "Dépannage SAV"}
         ],
         # technician_id absent -> non assigne
     }
