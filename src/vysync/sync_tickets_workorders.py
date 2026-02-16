@@ -339,7 +339,9 @@ Duree : {time_taken} minutes
 
 def upsert_tickets(sb, tickets: List[Dict[str, Any]], *, dry: bool = False) -> None:
     # Recuperer l'ensemble des vcom_system_key valides dans sites_mapping
-    valid_system_keys_result = sb.table("sites_mapping").select("vcom_system_key").execute()
+    valid_system_keys_result = sb.table("sites_mapping").select("vcom_system_key").limit(10000).execute()
+    if len(valid_system_keys_result.data) >= 10000:
+        logger.warning("SELECT tronqué à %d lignes, augmenter la limite !", len(valid_system_keys_result.data))
     valid_system_keys = {row["vcom_system_key"] for row in valid_system_keys_result.data if row["vcom_system_key"] is not None}
 
     # Filtrer les tickets pour ne garder que ceux avec un systemKey valide
@@ -398,7 +400,9 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
        - Sinon -> ne rien faire
     """
     # Recuperer l'ensemble des yuman_site_id valides dans sites_mapping
-    valid_site_ids_result = sb.table("sites_mapping").select("yuman_site_id").execute()
+    valid_site_ids_result = sb.table("sites_mapping").select("yuman_site_id").limit(10000).execute()
+    if len(valid_site_ids_result.data) >= 10000:
+        logger.warning("SELECT tronqué à %d lignes, augmenter la limite !", len(valid_site_ids_result.data))
     valid_site_ids = {row["yuman_site_id"] for row in valid_site_ids_result.data if row["yuman_site_id"] is not None}
 
     # Filtrer les workorders pour ne garder que ceux avec un site_id valide
@@ -426,8 +430,10 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
 
     # Recuperer les WO existants avec leurs valeurs actuelles
     existing_wo_result = sb.table("work_orders").select(
-        "workorder_id, status, date_planned, technician_id, wo_history, category_id, title, description, date_done, time_taken"
-    ).execute()
+        "workorder_id, status, date_planned, technician_id, wo_history, category_id, title, description, date_done, time_taken, source"
+    ).limit(10000).execute()
+    if len(existing_wo_result.data) >= 10000:
+        logger.warning("SELECT tronqué à %d lignes, augmenter la limite !", len(existing_wo_result.data))
 
     existing_wo_map = {
         row["workorder_id"]: row
@@ -437,7 +443,9 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
     # Recuperer les tickets lies aux WO (pour poster les commentaires VCOM)
     tickets_result = sb.table("tickets").select(
         "vcom_ticket_id, yuman_workorder_id, vcom_comment_id"
-    ).not_.is_("yuman_workorder_id", "null").execute()
+    ).not_.is_("yuman_workorder_id", "null").limit(10000).execute()
+    if len(tickets_result.data) >= 10000:
+        logger.warning("SELECT tronqué à %d lignes, augmenter la limite !", len(tickets_result.data))
 
     tickets_by_wo = {}
     for t in tickets_result.data:
@@ -538,6 +546,7 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
                     "changed_at": datetime.now(timezone.utc).isoformat()
                 })
                 row["wo_history"] = wo_history
+                row["source"] = existing.get("source") or "yuman_manual"
 
                 logger.info(
                     "Changement WO %s: status=%s->%s, date=%s->%s, tech=%s->%s",
@@ -586,9 +595,12 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
                     "technician_id": new_technician,
                     "changed_at": w.get("created_at") or datetime.now(timezone.utc).isoformat()
                 }]
+                row["source"] = existing.get("source") or "yuman_manual"
                 logger.info("WO %s sans historique -> initialisation (status=%s)", wo_id, new_status)
             elif other_changed:
                 # Champs non-historiques modifies -> upsert sans toucher wo_history
+                row["wo_history"] = existing.get("wo_history") or []
+                row["source"] = existing.get("source") or "yuman_manual"
                 logger.info(
                     "WO %s: champs non-historiques mis a jour (cat=%s, title=%s, desc=%s, done=%s, time=%s)",
                     wo_id, cat_changed, title_changed, desc_changed, date_done_changed, time_changed
