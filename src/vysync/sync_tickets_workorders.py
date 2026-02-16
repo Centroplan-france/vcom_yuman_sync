@@ -426,7 +426,7 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
 
     # Recuperer les WO existants avec leurs valeurs actuelles
     existing_wo_result = sb.table("work_orders").select(
-        "workorder_id, status, date_planned, technician_id, wo_history"
+        "workorder_id, status, date_planned, technician_id, wo_history, category_id, title, description, date_done, time_taken"
     ).execute()
 
     existing_wo_map = {
@@ -512,6 +512,15 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
             date_changed = not _dates_equal(old_date_planned, new_date_planned)
             tech_changed = old_technician != new_technician
 
+            # Changements non-historiques (ne generent PAS d'entree wo_history)
+            cat_changed = w.get("category_id") != existing.get("category_id")
+            title_changed = (w.get("title") or "") != (existing.get("title") or "")
+            desc_changed = (w.get("description") or "") != (existing.get("description") or "")
+            date_done_changed = not _dates_equal(existing.get("date_done"), w.get("date_done"))
+            time_changed = w.get("time_taken") != existing.get("time_taken")
+
+            other_changed = cat_changed or title_changed or desc_changed or date_done_changed or time_changed
+
             if status_changed or date_changed or tech_changed:
                 # -----------------------------------------------------------
                 # CHANGEMENT DETECTE
@@ -578,8 +587,14 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
                     "changed_at": w.get("created_at") or datetime.now(timezone.utc).isoformat()
                 }]
                 logger.info("WO %s sans historique -> initialisation (status=%s)", wo_id, new_status)
+            elif other_changed:
+                # Champs non-historiques modifies -> upsert sans toucher wo_history
+                logger.info(
+                    "WO %s: champs non-historiques mis a jour (cat=%s, title=%s, desc=%s, done=%s, time=%s)",
+                    wo_id, cat_changed, title_changed, desc_changed, date_done_changed, time_changed
+                )
             else:
-                # Aucun changement et wo_history existe -> ne rien faire
+                # Aucun changement -> ne rien faire
                 continue
 
         rows_to_upsert.append(row)
