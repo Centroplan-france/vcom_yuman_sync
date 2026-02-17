@@ -886,9 +886,10 @@ def assign_urgent_high_tickets(
             # Poster le commentaire VCOM initial pour les tickets fraîchement assignés
             if not dry and assigned_tickets:
                 try:
-                    wo_db = sb.table("work_orders").select("wo_history, number").eq("workorder_id", wo["id"]).execute()
+                    wo_db = sb.table("work_orders").select("workorder_id, wo_history").eq("workorder_id", wo["id"]).execute()
                     if wo_db.data:
                         wo_row = wo_db.data[0]
+                        wo_row["number"] = wo["id"]
                         wo_history = wo_row.get("wo_history") or []
                         if wo_history:
                             _update_vcom_comments_for_wo(sb, vc, wo["id"], wo_row, wo_history, assigned_tickets)
@@ -1135,9 +1136,10 @@ def assign_normal_tickets(
             # Poster le commentaire VCOM initial pour les tickets fraîchement assignés
             if not dry and assigned_tickets:
                 try:
-                    wo_db = sb.table("work_orders").select("wo_history, number").eq("workorder_id", wo["id"]).execute()
+                    wo_db = sb.table("work_orders").select("workorder_id, wo_history").eq("workorder_id", wo["id"]).execute()
                     if wo_db.data:
                         wo_row = wo_db.data[0]
+                        wo_row["number"] = wo["id"]
                         wo_history = wo_row.get("wo_history") or []
                         if wo_history:
                             _update_vcom_comments_for_wo(sb, vc, wo["id"], wo_row, wo_history, assigned_tickets)
