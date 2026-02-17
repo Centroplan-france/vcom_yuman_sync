@@ -865,6 +865,7 @@ def assign_urgent_high_tickets(
             enrich_workorder_description(yc, wo, site_tickets, dry=dry)
 
             # Marquer les tickets comme assigned
+            assigned_tickets = []
             for t in site_tickets:
                 tid = t.get("id") or t.get("vcom_ticket_id")
                 if dry:
@@ -877,9 +878,25 @@ def assign_urgent_high_tickets(
                         "yuman_workorder_id": wo["id"],
                         "last_sync_at": datetime.now(timezone.utc).isoformat()
                     }).eq("vcom_ticket_id", tid).execute()
+                    assigned_tickets.append({"vcom_ticket_id": tid, "vcom_comment_id": None})
                     logger.info("Ticket %s assigne au WO %s", tid, wo["id"])
                 except Exception as exc:
                     logger.error("Echec assignation ticket %s: %s", tid, exc)
+
+            # Poster le commentaire VCOM initial pour les tickets fraîchement assignés
+            if not dry and assigned_tickets:
+                try:
+                    wo_db = sb.table("work_orders").select("wo_history, number").eq("workorder_id", wo["id"]).execute()
+                    if wo_db.data:
+                        wo_row = wo_db.data[0]
+                        wo_history = wo_row.get("wo_history") or []
+                        if wo_history:
+                            _update_vcom_comments_for_wo(sb, vc, wo["id"], wo_row, wo_history, assigned_tickets)
+                            logger.info("Commentaire VCOM initial posté pour %d tickets du WO %s", len(assigned_tickets), wo["id"])
+                    else:
+                        logger.warning("WO %s non trouvé en base, commentaire VCOM non posté", wo["id"])
+                except Exception as exc:
+                    logger.warning("Erreur récupération wo_history pour WO %s, commentaire VCOM non posté: %s", wo["id"], exc)
         else:
             # Aucun WO SAV Reactive eligible -> creer un nouveau WO
             _create_new_workorder_for_tickets(sb, vc, yc, site_id, site_tickets, workorders, dry=dry)
@@ -1012,6 +1029,7 @@ def _create_new_workorder_for_tickets(
         }).execute()
 
         # Assigner les tickets a ce WO
+        assigned_tickets = []
         for t in tickets:
             tid = t.get("id") or t.get("vcom_ticket_id")
             try:
@@ -1021,8 +1039,15 @@ def _create_new_workorder_for_tickets(
                     "yuman_workorder_id": wo_id,
                     "last_sync_at": datetime.now(timezone.utc).isoformat()
                 }).eq("vcom_ticket_id", tid).execute()
+                assigned_tickets.append({"vcom_ticket_id": tid, "vcom_comment_id": None})
             except Exception as exc:
                 logger.error("Echec assignation ticket %s: %s", tid, exc)
+
+        # Poster le commentaire VCOM initial pour les tickets du nouveau WO
+        if assigned_tickets:
+            wo_row = {"number": wo_number, "wo_history": initial_wo_history}
+            _update_vcom_comments_for_wo(sb, vc, wo_id, wo_row, initial_wo_history, assigned_tickets)
+            logger.info("Commentaire VCOM initial posté pour %d tickets du WO %s", len(assigned_tickets), wo_id)
 
         logger.info("Workorder #%s cree pour site %s (%d tickets)", wo_number, site_id, len(tickets))
 
@@ -1089,6 +1114,7 @@ def assign_normal_tickets(
             enrich_workorder_description(yc, wo, site_tickets, dry=dry)
 
             # Marquer les tickets comme assigned
+            assigned_tickets = []
             for t in site_tickets:
                 tid = t.get("id") or t.get("vcom_ticket_id")
                 if dry:
@@ -1101,9 +1127,25 @@ def assign_normal_tickets(
                         "yuman_workorder_id": wo["id"],
                         "last_sync_at": datetime.now(timezone.utc).isoformat()
                     }).eq("vcom_ticket_id", tid).execute()
+                    assigned_tickets.append({"vcom_ticket_id": tid, "vcom_comment_id": None})
                     logger.info("Ticket %s (normal) assigne au WO %s", tid, wo["id"])
                 except Exception as exc:
                     logger.error("Echec assignation ticket %s: %s", tid, exc)
+
+            # Poster le commentaire VCOM initial pour les tickets fraîchement assignés
+            if not dry and assigned_tickets:
+                try:
+                    wo_db = sb.table("work_orders").select("wo_history, number").eq("workorder_id", wo["id"]).execute()
+                    if wo_db.data:
+                        wo_row = wo_db.data[0]
+                        wo_history = wo_row.get("wo_history") or []
+                        if wo_history:
+                            _update_vcom_comments_for_wo(sb, vc, wo["id"], wo_row, wo_history, assigned_tickets)
+                            logger.info("Commentaire VCOM initial posté pour %d tickets du WO %s", len(assigned_tickets), wo["id"])
+                    else:
+                        logger.warning("WO %s non trouvé en base, commentaire VCOM non posté", wo["id"])
+                except Exception as exc:
+                    logger.warning("Erreur récupération wo_history pour WO %s, commentaire VCOM non posté: %s", wo["id"], exc)
         else:
             # Aucun WO actif -> ignorer les tickets
             for t in site_tickets:
