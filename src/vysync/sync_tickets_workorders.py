@@ -430,7 +430,7 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
 
     # Recuperer les WO existants avec leurs valeurs actuelles
     existing_wo_result = sb.table("work_orders").select(
-        "workorder_id, status, date_planned, technician_id, wo_history, category_id, title, description, date_done, time_taken, source"
+        "workorder_id, status, date_planned, technician_id, wo_history, category_id, title, description, date_done, time_taken, source, site_id"
     ).limit(10000).execute()
     if len(existing_wo_result.data) >= 10000:
         logger.warning("SELECT tronqué à %d lignes, augmenter la limite !", len(existing_wo_result.data))
@@ -620,6 +620,54 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
             sb.table("work_orders").upsert(rows_to_upsert, on_conflict="workorder_id").execute()
             new_count = sum(1 for w in valid_orders if w["id"] not in existing_wo_map)
             logger.info("%d workorders upsertes (%d nouveaux)", len(rows_to_upsert), new_count)
+
+    # ------------------------------------------------------------------
+    # Detection et fermeture des WO fantomes
+    # (supprimes dans Yuman mais encore presents en base)
+    # ------------------------------------------------------------------
+    yuman_ids = {w["id"] for w in orders}
+
+    phantom_wos = [
+        wo for wo_id, wo in existing_wo_map.items()
+        if wo_id not in yuman_ids
+        and wo.get("status") not in ("Closed", "closed")
+        and wo.get("source") in ("yuman_manual", "vysync", None)
+        and wo.get("site_id") in valid_site_ids
+    ]
+
+    if phantom_wos:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        logger.info(
+            "%d WO fantomes detectes (supprimes dans Yuman): %s",
+            len(phantom_wos),
+            [wo["workorder_id"] for wo in phantom_wos],
+        )
+
+        for wo in phantom_wos:
+            wo_id = wo["workorder_id"]
+            wo_history = wo.get("wo_history") or []
+            wo_history.append({
+                "status": "Deleted",
+                "planned_at": None,
+                "technician_id": wo.get("technician_id"),
+                "changed_at": now_iso,
+            })
+
+            if dry:
+                logger.info(
+                    "[DRY] WO fantome %s -> Deleted (ancien status=%s)",
+                    wo_id, wo.get("status"),
+                )
+            else:
+                sb.table("work_orders").update({
+                    "status": "Deleted",
+                    "updated_at": now_iso,
+                    "wo_history": wo_history,
+                }).eq("workorder_id", wo_id).execute()
+                logger.info(
+                    "WO fantome %s ferme -> Deleted (ancien status=%s)",
+                    wo_id, wo.get("status"),
+                )
 
 
 # ---------------------------------------------------------------------------
