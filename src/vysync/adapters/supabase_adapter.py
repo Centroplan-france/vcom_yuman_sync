@@ -246,6 +246,7 @@ class SupabaseAdapter:
             row = s.to_dict()
             row["created_at"] = _now_iso()        # horodatage UTC
             row.pop("id", None)
+            row.pop("yuman_client_id", None)
             self.sb.table(SITE_TABLE).insert([row]).execute()
 
         IMMUTABLE_COLS = {"created_at", "ignore_site"}
