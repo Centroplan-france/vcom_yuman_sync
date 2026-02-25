@@ -1227,39 +1227,42 @@ def close_tickets_of_closed_workorders(
     total_closed = 0
 
     for wo_id in closed_wo_ids:
-        # Chercher directement les tickets non-clos lies a ce WO
-        t_rows = (
-            sb.table("tickets")
-            .select("vcom_ticket_id, status")
-            .eq("yuman_workorder_id", wo_id)
-            .execute()
-        )
+        try:
+            # Chercher directement les tickets non-clos lies a ce WO
+            t_rows = (
+                sb.table("tickets")
+                .select("vcom_ticket_id, status")
+                .eq("yuman_workorder_id", wo_id)
+                .execute()
+            )
 
-        tickets_to_close = [
-            row for row in (t_rows.data or [])
-            if row.get("status", "").lower() not in ("closed", "deleted")
-        ]
+            tickets_to_close = [
+                row for row in (t_rows.data or [])
+                if row.get("status", "").lower() not in ("closed", "deleted")
+            ]
 
-        if not tickets_to_close:
-            continue
+            if not tickets_to_close:
+                continue
 
-        if dry:
-            logger.info("[DRY][Filet] WO %s : %d tickets a fermer", wo_id, len(tickets_to_close))
-            total_closed += len(tickets_to_close)
-            continue
+            if dry:
+                logger.info("[DRY][Filet] WO %s : %d tickets a fermer", wo_id, len(tickets_to_close))
+                total_closed += len(tickets_to_close)
+                continue
 
-        for row in tickets_to_close:
-            tid = row["vcom_ticket_id"]
-            try:
-                vc.close_ticket(tid)
-                sb.table("tickets").update({
-                    "status": "closed",
-                    "last_sync_at": datetime.now(timezone.utc).isoformat()
-                }).eq("vcom_ticket_id", tid).execute()
-                logger.info("[Filet] Ticket %s ferme (WO %s cloture)", tid, wo_id)
-                total_closed += 1
-            except Exception as exc:
-                logger.error("[Filet] Echec fermeture ticket %s: %s", tid, exc)
+            for row in tickets_to_close:
+                tid = row["vcom_ticket_id"]
+                try:
+                    vc.close_ticket(tid)
+                    sb.table("tickets").update({
+                        "status": "closed",
+                        "last_sync_at": datetime.now(timezone.utc).isoformat()
+                    }).eq("vcom_ticket_id", tid).execute()
+                    logger.info("[Filet] Ticket %s ferme (WO %s cloture)", tid, wo_id)
+                    total_closed += 1
+                except Exception as exc:
+                    logger.error("[Filet] Echec fermeture ticket %s: %s", tid, exc)
+        except Exception as exc:
+            logger.error("[Filet] Erreur Supabase pour le workorder %s, passage au suivant: %s", wo_id, exc)
 
     logger.info("[Filet] %d tickets fermes au total", total_closed)
 
