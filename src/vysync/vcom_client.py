@@ -291,8 +291,14 @@ class VCOMAPIClient:
         return self.update_ticket(ticket_id, status="closed", summary=summary)
 
     def delete_outage(self, ticket_id: str) -> bool:
-        resp = self._make_request("DELETE", f"/tickets/{ticket_id}/outage")
-        return resp.status_code == 204
+        try:
+            resp = self._make_request("DELETE", f"/tickets/{ticket_id}/outage")
+            return resp.status_code == 204
+        except requests.exceptions.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 400:
+                logger.warning("delete_outage(%s) : 400 Bad Request (pas d'outage associee)", ticket_id)
+                return False
+            raise
 
     # -- Ticket Comments ----------------------------------------------------
     def get_ticket_comments(self, ticket_id: str) -> List[Dict[str, Any]]:
