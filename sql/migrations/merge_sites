@@ -1,0 +1,48 @@
+DROP FUNCTION IF EXISTS merge_sites(int, int);
+
+CREATE FUNCTION merge_sites(vcom_id int, yuman_id int)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+declare
+    old_yid int;
+begin
+    -- 1. Déférer la contrainte le temps de la transaction
+    set constraints work_orders_site_id_fkey deferred;
+
+    -- 2. Mémoriser l'ID Yuman
+    select yuman_site_id into old_yid
+    from   sites_mapping
+    where  id = yuman_id;
+
+    -- 3. Réaffecter les équipements du site Yuman vers le site VCOM
+    update equipments_mapping
+    set    site_id = vcom_id
+    where  site_id = yuman_id;
+
+    -- 4. Compléter les colonnes manquantes sur la ligne VCOM avant suppression
+    update sites_mapping as v
+    set    client_map_id     = coalesce(v.client_map_id,     y.client_map_id),
+           aldi_id           = coalesce(v.aldi_id,           y.aldi_id),
+           aldi_store_id     = coalesce(v.aldi_store_id,     y.aldi_store_id),
+           project_number_cp = coalesce(v.project_number_cp, y.project_number_cp)
+    from   sites_mapping y
+    where  y.id = yuman_id
+      and  v.id = vcom_id;
+
+    -- 4bis. Libérer le yuman_site_id de la ligne Yuman avant réattribution
+    --       (l'index unique ix_sites_mapping_yuman_site_id n'est pas déférable)
+    update sites_mapping
+    set    yuman_site_id = null
+    where  id = yuman_id;
+
+    -- 5. Attribuer l'ID Yuman à la ligne VCOM
+    update sites_mapping
+    set    yuman_site_id = old_yid
+    where  id = vcom_id;
+
+    -- 6. Supprimer la ligne Yuman
+    delete from sites_mapping
+    where  id = yuman_id;
+end;
+$$;
