@@ -337,12 +337,29 @@ Duree : {time_taken} minutes
 # ---------------------------------------------------------------------------
 # Helpers d'upsert (DB - Supabase)
 
+def fetch_all_rows(query_builder, page_size=900):
+    """Récupère toutes les lignes d'une requête Supabase en paginant.
+
+    Le paramètre serveur db-max-rows de PostgREST tronque les résultats à
+    1000 lignes. On pagine donc par blocs de ``page_size`` (< 1000).
+    ``query_builder`` doit être un objet requête Supabase *avant* l'appel à
+    ``.execute()`` (ex: ``sb.table("t").select("col")``).
+    """
+    all_rows: list = []
+    offset = 0
+    while True:
+        result = query_builder.range(offset, offset + page_size - 1).execute()
+        all_rows.extend(result.data)
+        if len(result.data) < page_size:
+            break
+        offset += page_size
+    return all_rows
+
+
 def upsert_tickets(sb, tickets: List[Dict[str, Any]], *, dry: bool = False) -> None:
     # Recuperer l'ensemble des vcom_system_key valides dans sites_mapping
-    valid_system_keys_result = sb.table("sites_mapping").select("vcom_system_key").limit(10000).execute()
-    if len(valid_system_keys_result.data) >= 10000:
-        logger.warning("SELECT tronqué à %d lignes, augmenter la limite !", len(valid_system_keys_result.data))
-    valid_system_keys = {row["vcom_system_key"] for row in valid_system_keys_result.data if row["vcom_system_key"] is not None}
+    valid_system_keys_rows = fetch_all_rows(sb.table("sites_mapping").select("vcom_system_key"))
+    valid_system_keys = {row["vcom_system_key"] for row in valid_system_keys_rows if row["vcom_system_key"] is not None}
 
     # Filtrer les tickets pour ne garder que ceux avec un systemKey valide
     valid_tickets = []
@@ -400,10 +417,8 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
        - Sinon -> ne rien faire
     """
     # Recuperer l'ensemble des yuman_site_id valides dans sites_mapping
-    valid_site_ids_result = sb.table("sites_mapping").select("yuman_site_id").limit(10000).execute()
-    if len(valid_site_ids_result.data) >= 10000:
-        logger.warning("SELECT tronqué à %d lignes, augmenter la limite !", len(valid_site_ids_result.data))
-    valid_site_ids = {row["yuman_site_id"] for row in valid_site_ids_result.data if row["yuman_site_id"] is not None}
+    valid_site_ids_rows = fetch_all_rows(sb.table("sites_mapping").select("yuman_site_id"))
+    valid_site_ids = {row["yuman_site_id"] for row in valid_site_ids_rows if row["yuman_site_id"] is not None}
 
     # Filtrer les workorders pour ne garder que ceux avec un site_id valide
     valid_orders = []
@@ -429,26 +444,24 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
         return
 
     # Recuperer les WO existants avec leurs valeurs actuelles
-    existing_wo_result = sb.table("work_orders").select(
+    existing_wo_rows = fetch_all_rows(sb.table("work_orders").select(
         "workorder_id, status, date_planned, technician_id, wo_history, category_id, title, description, date_done, time_taken, source, site_id"
-    ).limit(10000).execute()
-    if len(existing_wo_result.data) >= 10000:
-        logger.warning("SELECT tronqué à %d lignes, augmenter la limite !", len(existing_wo_result.data))
+    ))
 
     existing_wo_map = {
         row["workorder_id"]: row
-        for row in existing_wo_result.data
+        for row in existing_wo_rows
     }
 
     # Recuperer les tickets lies aux WO (pour poster les commentaires VCOM)
-    tickets_result = sb.table("tickets").select(
-        "vcom_ticket_id, yuman_workorder_id, vcom_comment_id"
-    ).not_.is_("yuman_workorder_id", "null").limit(10000).execute()
-    if len(tickets_result.data) >= 10000:
-        logger.warning("SELECT tronqué à %d lignes, augmenter la limite !", len(tickets_result.data))
+    tickets_rows = fetch_all_rows(
+        sb.table("tickets").select(
+            "vcom_ticket_id, yuman_workorder_id, vcom_comment_id"
+        ).not_.is_("yuman_workorder_id", "null")
+    )
 
     tickets_by_wo = {}
-    for t in tickets_result.data:
+    for t in tickets_rows:
         wo_id = t["yuman_workorder_id"]
         tickets_by_wo.setdefault(wo_id, []).append(t)
 
@@ -487,6 +500,19 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
             "predicted_duration": predicted_duration,
             "time_taken": w.get("time_taken"),
         }
+
+        if existing is None:
+            # Filet de securite : verifier en base que le WO n'existe pas deja
+            # (protege contre une eventuelle troncature de la pagination)
+            check = sb.table("work_orders").select(
+                "workorder_id, status, date_planned, technician_id, wo_history, category_id, title, description, date_done, time_taken, source, site_id"
+            ).eq("workorder_id", wo_id).execute()
+            if check.data:
+                existing = check.data[0]
+                existing_wo_map[wo_id] = existing
+                logger.warning(
+                    "WO %s absent du cache mais present en base — traite comme existant", wo_id
+                )
 
         if existing is None:
             # ===============================================================
