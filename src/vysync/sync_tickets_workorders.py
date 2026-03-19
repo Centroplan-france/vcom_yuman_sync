@@ -284,7 +284,7 @@ def enrich_workorder_description(
         return True
 
     additional = "".join(
-        f"\n\n--- Ticket VCOM ---\n{t.get('title') or t.get('designation') or t.get('vcom_ticket_id')}:\n{textwrap.fill(t.get('description', '') or '', width=80)}"
+        f"\n\n--- Ticket VCOM ---\n[{t.get('vcom_ticket_id') or t.get('id')}] {t.get('title') or t.get('designation') or t.get('vcom_ticket_id')}:\n{textwrap.fill(t.get('description', '') or '', width=80)}"
         for t in tickets
     )
     new_desc = (wo.get("description") or "") + additional
@@ -774,6 +774,7 @@ def _relink_tickets_from_deleted_sav_wo(
             else:
                 sb.table("tickets").update({
                     "yuman_workorder_id": new_wo_id,
+                    "vcom_comment_id": None,
                     "last_sync_at": now_iso,
                 }).eq("vcom_ticket_id", tid).execute()
                 logger.info(
@@ -1120,10 +1121,10 @@ def _create_new_workorder_for_tickets(
 
     # Construire le payload
     title = tickets[0].get("designation") or tickets[0].get("id") or "Ticket VCOM"
-    description = "\n".join(
-        f"{t.get('designation') or t.get('id')}:\n{t.get('description', '')}"
+    description = "".join(
+        f"\n\n--- Ticket VCOM ---\n[{t.get('id')}] {t.get('designation') or t.get('id')}:\n{t.get('description', '')}"
         for t in tickets
-    )
+    ).strip()
 
     # Lister les WO ouverts/planifiés sur ce site (pour info dans la description)
     site_wos = [
