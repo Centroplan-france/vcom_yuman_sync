@@ -697,14 +697,14 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
 
             # Si c'est un WO SAV, tenter de re-lier les tickets au WO maintenance
             if wo.get("category_id") in (CATEGORY_SAV_CURATIVE, CATEGORY_SAV_FUSION):
-                _relink_tickets_from_deleted_sav_wo(sb, wo, orders, dry=dry)
+                _relink_tickets_from_deleted_sav_wo(sb, vc, wo, orders, dry=dry)
 
 
 # ---------------------------------------------------------------------------
 # Re-liaison des tickets quand un WO SAV est supprime
 
 def _relink_tickets_from_deleted_sav_wo(
-    sb, deleted_wo: Dict[str, Any], yuman_orders: List[Dict[str, Any]], *, dry: bool = False
+    sb, vc, deleted_wo: Dict[str, Any], yuman_orders: List[Dict[str, Any]], *, dry: bool = False
 ) -> None:
     """
     Quand un WO SAV est supprime, Anthony a peut-etre copie son contenu dans
@@ -719,7 +719,7 @@ def _relink_tickets_from_deleted_sav_wo(
 
     # 1. Trouver les tickets lies a ce WO SAV supprime
     linked = sb.table("tickets").select(
-        "vcom_ticket_id, title"
+        "vcom_ticket_id, title, vcom_comment_id"
     ).eq("yuman_workorder_id", wo_id).execute().data
 
     if not linked:
@@ -774,13 +774,36 @@ def _relink_tickets_from_deleted_sav_wo(
             else:
                 sb.table("tickets").update({
                     "yuman_workorder_id": new_wo_id,
-                    "vcom_comment_id": None,
                     "last_sync_at": now_iso,
                 }).eq("vcom_ticket_id", tid).execute()
                 logger.info(
                     "Ticket %s re-lie: WO SAV supprime %s -> WO %s (site %s)",
                     tid, wo_id, new_wo_id, site_id,
                 )
+
+                # Mettre a jour le commentaire VCOM avec l'historique du nouveau WO
+                try:
+                    new_wo_db = sb.table("work_orders").select(
+                        "workorder_id, wo_history"
+                    ).eq("workorder_id", new_wo_id).execute().data
+                    if new_wo_db:
+                        new_wo_row = new_wo_db[0]
+                        new_wo_row["number"] = new_wo_id
+                        new_wo_history = new_wo_row.get("wo_history") or []
+                        if new_wo_history:
+                            _update_vcom_comments_for_wo(
+                                sb, vc, new_wo_id, new_wo_row, new_wo_history,
+                                [{"vcom_ticket_id": tid, "vcom_comment_id": ticket.get("vcom_comment_id")}],
+                            )
+                            logger.info(
+                                "Commentaire VCOM du ticket %s mis a jour avec historique WO %s",
+                                tid, new_wo_id,
+                            )
+                except Exception as exc:
+                    logger.warning(
+                        "Echec mise a jour commentaire VCOM ticket %s apres re-liaison: %s",
+                        tid, exc,
+                    )
         else:
             logger.warning(
                 "Ticket %s: WO SAV %s supprime, aucun WO avec texte correspondant sur site %s",
