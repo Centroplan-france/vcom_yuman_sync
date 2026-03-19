@@ -284,7 +284,7 @@ def enrich_workorder_description(
         return True
 
     additional = "".join(
-        f"\n\n--- Ticket VCOM ---\n{t.get('title') or t.get('designation') or t.get('vcom_ticket_id')}:\n{textwrap.fill(t.get('description', '') or '', width=80)}"
+        f"\n\n--- Ticket VCOM ---\n[{t.get('vcom_ticket_id') or t.get('id')}] {t.get('title') or t.get('designation') or t.get('vcom_ticket_id')}:\n{textwrap.fill(t.get('description', '') or '', width=80)}"
         for t in tickets
     )
     new_desc = (wo.get("description") or "") + additional
@@ -695,6 +695,121 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
                     wo_id, wo.get("status"),
                 )
 
+            # Si c'est un WO SAV, tenter de re-lier les tickets au WO maintenance
+            if wo.get("category_id") in (CATEGORY_SAV_CURATIVE, CATEGORY_SAV_FUSION):
+                _relink_tickets_from_deleted_sav_wo(sb, vc, wo, orders, dry=dry)
+
+
+# ---------------------------------------------------------------------------
+# Re-liaison des tickets quand un WO SAV est supprime
+
+def _relink_tickets_from_deleted_sav_wo(
+    sb, vc, deleted_wo: Dict[str, Any], yuman_orders: List[Dict[str, Any]], *, dry: bool = False
+) -> None:
+    """
+    Quand un WO SAV est supprime, Anthony a peut-etre copie son contenu dans
+    un WO maintenance existant. On cherche ce WO maintenance sur le meme site
+    et on re-lie les tickets pour ne pas perdre le lien ticket-WO.
+    """
+    wo_id = deleted_wo["workorder_id"]
+    site_id = deleted_wo.get("site_id")
+
+    if not site_id:
+        return
+
+    # 1. Trouver les tickets lies a ce WO SAV supprime
+    linked = sb.table("tickets").select(
+        "vcom_ticket_id, title, vcom_comment_id"
+    ).eq("yuman_workorder_id", wo_id).execute().data
+
+    if not linked:
+        logger.debug("WO SAV %s supprime sans ticket lie, rien a re-lier", wo_id)
+        return
+
+    logger.info(
+        "WO SAV %s supprime avec %d ticket(s) lie(s), recherche WO maintenance sur site %s",
+        wo_id, len(linked), site_id,
+    )
+
+    # 2. Chercher les WO actifs sur le meme site (hors le WO supprime)
+    candidates = [
+        w for w in yuman_orders
+        if w.get("site_id") == site_id
+        and w.get("id") != wo_id
+        and w.get("status", "").lower() not in ("closed", "deleted")
+    ]
+
+    if not candidates:
+        logger.warning(
+            "WO SAV %s supprime: aucun WO actif sur site %s pour re-lier %d ticket(s)",
+            wo_id, site_id, len(linked),
+        )
+        return
+
+    # 3. Pour chaque ticket, chercher un WO candidat dont la description
+    #    contient le texte du ticket (multi-criteres)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for ticket in linked:
+        tid = ticket["vcom_ticket_id"]
+        title = ticket.get("title") or ""
+        matched_wo = None
+
+        for candidate in candidates:
+            desc = (candidate.get("description") or "").lower()
+            # Match multi-criteres : marqueur VCOM, ticket ID, ou titre
+            if ("--- ticket vcom ---" in desc
+                    or str(tid).lower() in desc
+                    or (title and len(title) > 5 and title.lower() in desc)):
+                matched_wo = candidate
+                break
+
+        if matched_wo:
+            new_wo_id = matched_wo["id"]
+            if dry:
+                logger.info(
+                    "[DRY] Re-lien ticket %s: WO SAV %s -> WO %s (site %s)",
+                    tid, wo_id, new_wo_id, site_id,
+                )
+            else:
+                sb.table("tickets").update({
+                    "yuman_workorder_id": new_wo_id,
+                    "last_sync_at": now_iso,
+                }).eq("vcom_ticket_id", tid).execute()
+                logger.info(
+                    "Ticket %s re-lie: WO SAV supprime %s -> WO %s (site %s)",
+                    tid, wo_id, new_wo_id, site_id,
+                )
+
+                # Mettre a jour le commentaire VCOM avec l'historique du nouveau WO
+                try:
+                    new_wo_db = sb.table("work_orders").select(
+                        "workorder_id, wo_history"
+                    ).eq("workorder_id", new_wo_id).execute().data
+                    if new_wo_db:
+                        new_wo_row = new_wo_db[0]
+                        new_wo_row["number"] = new_wo_id
+                        new_wo_history = new_wo_row.get("wo_history") or []
+                        if new_wo_history:
+                            _update_vcom_comments_for_wo(
+                                sb, vc, new_wo_id, new_wo_row, new_wo_history,
+                                [{"vcom_ticket_id": tid, "vcom_comment_id": ticket.get("vcom_comment_id")}],
+                            )
+                            logger.info(
+                                "Commentaire VCOM du ticket %s mis a jour avec historique WO %s",
+                                tid, new_wo_id,
+                            )
+                except Exception as exc:
+                    logger.warning(
+                        "Echec mise a jour commentaire VCOM ticket %s apres re-liaison: %s",
+                        tid, exc,
+                    )
+        else:
+            logger.warning(
+                "Ticket %s: WO SAV %s supprime, aucun WO avec texte correspondant sur site %s",
+                tid, wo_id, site_id,
+            )
+
 
 # ---------------------------------------------------------------------------
 # Helpers pour la mise a jour des commentaires VCOM depuis wo_history
@@ -1029,10 +1144,10 @@ def _create_new_workorder_for_tickets(
 
     # Construire le payload
     title = tickets[0].get("designation") or tickets[0].get("id") or "Ticket VCOM"
-    description = "\n".join(
-        f"{t.get('designation') or t.get('id')}:\n{t.get('description', '')}"
+    description = "".join(
+        f"\n\n--- Ticket VCOM ---\n[{t.get('id')}] {t.get('designation') or t.get('id')}:\n{t.get('description', '')}"
         for t in tickets
-    )
+    ).strip()
 
     # Lister les WO ouverts/planifiés sur ce site (pour info dans la description)
     site_wos = [
