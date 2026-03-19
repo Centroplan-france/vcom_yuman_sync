@@ -695,6 +695,97 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
                     wo_id, wo.get("status"),
                 )
 
+            # Si c'est un WO SAV, tenter de re-lier les tickets au WO maintenance
+            if wo.get("category_id") in (CATEGORY_SAV_CURATIVE, CATEGORY_SAV_FUSION):
+                _relink_tickets_from_deleted_sav_wo(sb, wo, orders, dry=dry)
+
+
+# ---------------------------------------------------------------------------
+# Re-liaison des tickets quand un WO SAV est supprime
+
+def _relink_tickets_from_deleted_sav_wo(
+    sb, deleted_wo: Dict[str, Any], yuman_orders: List[Dict[str, Any]], *, dry: bool = False
+) -> None:
+    """
+    Quand un WO SAV est supprime, Anthony a peut-etre copie son contenu dans
+    un WO maintenance existant. On cherche ce WO maintenance sur le meme site
+    et on re-lie les tickets pour ne pas perdre le lien ticket-WO.
+    """
+    wo_id = deleted_wo["workorder_id"]
+    site_id = deleted_wo.get("site_id")
+
+    if not site_id:
+        return
+
+    # 1. Trouver les tickets lies a ce WO SAV supprime
+    linked = sb.table("tickets").select(
+        "vcom_ticket_id, title"
+    ).eq("yuman_workorder_id", wo_id).execute().data
+
+    if not linked:
+        logger.debug("WO SAV %s supprime sans ticket lie, rien a re-lier", wo_id)
+        return
+
+    logger.info(
+        "WO SAV %s supprime avec %d ticket(s) lie(s), recherche WO maintenance sur site %s",
+        wo_id, len(linked), site_id,
+    )
+
+    # 2. Chercher les WO actifs sur le meme site (hors le WO supprime)
+    candidates = [
+        w for w in yuman_orders
+        if w.get("site_id") == site_id
+        and w.get("id") != wo_id
+        and w.get("status", "").lower() not in ("closed", "deleted")
+    ]
+
+    if not candidates:
+        logger.warning(
+            "WO SAV %s supprime: aucun WO actif sur site %s pour re-lier %d ticket(s)",
+            wo_id, site_id, len(linked),
+        )
+        return
+
+    # 3. Pour chaque ticket, chercher un WO candidat dont la description
+    #    contient le texte du ticket (multi-criteres)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for ticket in linked:
+        tid = ticket["vcom_ticket_id"]
+        title = ticket.get("title") or ""
+        matched_wo = None
+
+        for candidate in candidates:
+            desc = (candidate.get("description") or "").lower()
+            # Match multi-criteres : marqueur VCOM, ticket ID, ou titre
+            if ("--- ticket vcom ---" in desc
+                    or str(tid).lower() in desc
+                    or (title and len(title) > 5 and title.lower() in desc)):
+                matched_wo = candidate
+                break
+
+        if matched_wo:
+            new_wo_id = matched_wo["id"]
+            if dry:
+                logger.info(
+                    "[DRY] Re-lien ticket %s: WO SAV %s -> WO %s (site %s)",
+                    tid, wo_id, new_wo_id, site_id,
+                )
+            else:
+                sb.table("tickets").update({
+                    "yuman_workorder_id": new_wo_id,
+                    "last_sync_at": now_iso,
+                }).eq("vcom_ticket_id", tid).execute()
+                logger.info(
+                    "Ticket %s re-lie: WO SAV supprime %s -> WO %s (site %s)",
+                    tid, wo_id, new_wo_id, site_id,
+                )
+        else:
+            logger.warning(
+                "Ticket %s: WO SAV %s supprime, aucun WO avec texte correspondant sur site %s",
+                tid, wo_id, site_id,
+            )
+
 
 # ---------------------------------------------------------------------------
 # Helpers pour la mise a jour des commentaires VCOM depuis wo_history
