@@ -127,13 +127,13 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-from vysync.utils import normalize_name
+from vysync.utils import normalize_name, normalize_site_name
 
 
 def calculate_similarity(name1: str, name2: str) -> float:
     """Calcule la similarité entre deux noms."""
-    n1 = normalize_name(name1)
-    n2 = normalize_name(name2)
+    n1 = normalize_name(normalize_site_name(name1))
+    n2 = normalize_name(normalize_site_name(name2))
     if not n1 or not n2:
         return 0.0
     return SequenceMatcher(None, n1, n2).ratio()
