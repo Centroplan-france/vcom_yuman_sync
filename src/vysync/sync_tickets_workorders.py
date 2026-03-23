@@ -656,7 +656,7 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
     phantom_wos = [
         wo for wo_id, wo in existing_wo_map.items()
         if wo_id not in yuman_ids
-        and wo.get("status") not in ("Closed", "closed")
+        and wo.get("status") not in ("Closed", "closed", "Deleted")
         and wo.get("source") in ("yuman_manual", "vysync", None)
         and wo.get("site_id") in valid_site_ids
     ]
