@@ -520,8 +520,7 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
             # ===============================================================
             yuman_created_at = w.get("created_at") or datetime.now(timezone.utc).isoformat()
 
-            # Regle metier : si status = "Open", planned_at = null
-            initial_planned_at = None if new_status == "Open" else new_date_planned
+            initial_planned_at = new_date_planned
 
             row["source"] = "yuman_manual"
             row["wo_history"] = [{
@@ -560,8 +559,7 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
                 # CHANGEMENT DETECTE
                 # -----------------------------------------------------------
 
-                # Regle metier : si status = "Open", planned_at = null dans l'historique
-                history_planned_at = None if new_status == "Open" else new_date_planned
+                history_planned_at = new_date_planned
 
                 # Recuperer l'historique existant et ajouter la nouvelle entree
                 wo_history = existing.get("wo_history") or []
@@ -614,7 +612,7 @@ def upsert_workorders(sb, yc, vc, orders: List[Dict[str, Any]], *, dry: bool = F
 
             elif existing.get("wo_history") is None:
                 # Pas de changement, mais wo_history NULL → initialiser
-                history_planned_at = None if new_status == "Open" else new_date_planned
+                history_planned_at = new_date_planned
                 row["wo_history"] = [{
                     "status": new_status,
                     "planned_at": history_planned_at,
