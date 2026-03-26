@@ -473,7 +473,39 @@ class SupabaseAdapter:
                 )
                 logger.debug("[SB] FLAG obsolete by vcom_id %d equips → %s", len(vcom_ids), res.data)
 
+    def fetch_obsolete_inverter_serials(self) -> set:
+        """Retourne l'ensemble des serial_number d'onduleurs marqués is_obsolete=True."""
+        rows = (
+            self.sb.table(EQUIP_TABLE)
+            .select("serial_number")
+            .eq("is_obsolete", True)
+            .eq("category_id", CAT_INVERTER)
+            .execute()
+            .data or []
+        )
+        return {_norm_serial(r["serial_number"]) for r in rows if r.get("serial_number")}
 
+    def restore_inverters(self, serials: list) -> int:
+        """
+        Réactive les onduleurs marqués obsolètes (is_obsolete=False, obsolete_at=NULL).
+
+        Args:
+            serials: liste de serial_number à réactiver
+
+        Returns:
+            Nombre de lignes affectées
+        """
+        if not serials:
+            return 0
+        res = (
+            self.sb.table(EQUIP_TABLE)
+            .update({"is_obsolete": False, "obsolete_at": None})
+            .in_("serial_number", serials)
+            .execute()
+        )
+        count = len(res.data) if res.data else 0
+        logger.info("[SB] RESTORE %d onduleurs obsolètes → actifs: %s", count, serials)
+        return count
 
     def fetch_clients(self) -> Dict[int, Client]:
         """
