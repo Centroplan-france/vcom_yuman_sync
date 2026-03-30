@@ -171,7 +171,9 @@ closed AS (
   SELECT date_trunc('week', date_done)::date as week_start, count(*) as nb,
     round(avg(EXTRACT(EPOCH FROM (date_done - yuman_created_at))/86400)::numeric, 1) as avg_lifecycle_days,
     round(avg(CASE WHEN date_planned >= yuman_created_at
-      THEN EXTRACT(EPOCH FROM (date_planned - yuman_created_at))/86400 END)::numeric, 1) as avg_days_to_plan
+      THEN EXTRACT(EPOCH FROM (date_planned - yuman_created_at))/86400 END)::numeric, 1) as avg_days_to_plan,
+    round(avg(CASE WHEN date_done >= date_planned
+      THEN EXTRACT(EPOCH FROM (date_done - date_planned))/86400 END)::numeric, 1) as avg_days_execution
   FROM work_orders
   WHERE date_done >= now() - interval '8 weeks'
     AND status = 'Closed'
@@ -183,11 +185,24 @@ SELECT w.week_start,
   coalesce(cr.nb, 0) as created,
   coalesce(cl.nb, 0) as closed,
   cl.avg_lifecycle_days,
-  cl.avg_days_to_plan
+  cl.avg_days_to_plan,
+  cl.avg_days_execution
 FROM weeks w
 LEFT JOIN created cr ON cr.week_start = w.week_start
 LEFT JOIN closed cl ON cl.week_start = w.week_start
 ORDER BY w.week_start;
+"""
+
+# ── Bloc 3b — Lots préventifs ouverts (≥ 5 WO créés le même jour) ─────────────
+
+SQL_PREVENTIF_LOTS = """
+SELECT yuman_created_at::date as created_date, count(*) as nb
+FROM work_orders wo
+JOIN workorder_categories wc ON wo.category_id = wc.id
+WHERE wo.status = 'Open' AND wc.name = 'Maintenance Préventive'
+GROUP BY 1
+HAVING count(*) >= 5
+ORDER BY nb DESC;
 """
 
 # ── Bloc 4 — Vieillissement du backlog ────────────────────────────────────────
@@ -221,6 +236,7 @@ class ReportData:
     proximity: list[dict]
     trends: list[dict]
     aging: list[dict]
+    preventif_lots: list[dict]
 
 
 def fetch_all() -> ReportData:
@@ -249,6 +265,9 @@ def fetch_all() -> ReportData:
         aging = _exec(conn, SQL_AGING)
         logger.info(f"[REPORT] Vieillissement: {len(aging)} tranches")
 
+        preventif_lots = _exec(conn, SQL_PREVENTIF_LOTS)
+        logger.info(f"[REPORT] Lots préventifs: {len(preventif_lots)} lots")
+
         return ReportData(
             kpis=kpis,
             open_wo=open_wo,
@@ -256,6 +275,7 @@ def fetch_all() -> ReportData:
             proximity=proximity,
             trends=trends,
             aging=aging,
+            preventif_lots=preventif_lots,
         )
     finally:
         conn.close()
