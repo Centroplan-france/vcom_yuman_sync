@@ -26,7 +26,9 @@ def _get_connection():
     url = os.getenv("DATABASE_URL")
     if not url:
         raise EnvironmentError("DATABASE_URL manquant")
-    return psycopg2.connect(url)
+    conn = psycopg2.connect(url)
+    conn.set_client_encoding('UTF8')
+    return conn
 
 
 def _exec(conn, sql: str) -> list[dict[str, Any]]:
