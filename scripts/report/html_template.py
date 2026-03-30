@@ -10,6 +10,18 @@ from typing import Any
 from .queries import ReportData
 
 
+def _short_site_name(name: str) -> str:
+    """Raccourcit un nom de site : retire 'France ' et le suffixe entre parenthèses.
+
+    Exemples :
+      "ALDI France Wimereux (Bois Grenier)" → "ALDI Wimereux"
+      "Lidl France Cestas (Cestas)"         → "Lidl Cestas"
+    """
+    name = (name or "").replace("France ", "")
+    name = re.sub(r"\s*\([^)]*\)$", "", name).strip()
+    return name
+
+
 def _fmt_date(d: str | None) -> str:
     """Convertit une date ISO en format DD/MM/YYYY."""
     if not d:
@@ -82,6 +94,130 @@ def _compute_kpi_summary(data: ReportData) -> dict[str, Any]:
     }
 
 
+def _generate_trend_comment(trends: list[dict]) -> str:
+    """Génère un commentaire contextuel sur les tendances du cycle de vie.
+
+    Analyse :
+    - Série hausse/baisse continue sur avg_lifecycle_days
+    - Ratio planif/exécution (avg_days_execution systématiquement < 1j)
+    """
+    lifecycle_vals = [
+        (r.get("week_start"), float(r["avg_lifecycle_days"]))
+        for r in trends
+        if r.get("avg_lifecycle_days") is not None
+    ]
+
+    comments = []
+
+    if len(lifecycle_vals) >= 2:
+        # Compter les N dernières valeurs en tendance continue
+        direction = None  # "up" or "down"
+        streak = 1
+        for i in range(len(lifecycle_vals) - 1, 0, -1):
+            curr = lifecycle_vals[i][1]
+            prev = lifecycle_vals[i - 1][1]
+            if direction is None:
+                direction = "down" if curr < prev else "up"
+                streak = 2
+            elif direction == "down" and curr < prev:
+                streak += 1
+            elif direction == "up" and curr > prev:
+                streak += 1
+            else:
+                break
+
+        if streak >= 3 and direction == "down":
+            first_val = lifecycle_vals[-(streak)][1]
+            last_val = lifecycle_vals[-1][1]
+            comments.append(
+                f"Le cycle moyen est en baisse depuis {streak} semaines "
+                f"({first_val:.1f}j → {last_val:.1f}j)."
+            )
+        elif streak >= 3 and direction == "up":
+            first_val = lifecycle_vals[-(streak)][1]
+            last_val = lifecycle_vals[-1][1]
+            comments.append(
+                f"Le cycle moyen est en hausse depuis {streak} semaines "
+                f"({first_val:.1f}j → {last_val:.1f}j)."
+            )
+
+    # Ratio planif/exécution : avg_days_execution < 1j sur toutes les semaines
+    exec_vals = [
+        float(r["avg_days_execution"])
+        for r in trends
+        if r.get("avg_days_execution") is not None
+    ]
+    if exec_vals and all(v < 1.0 for v in exec_vals):
+        comments.append(
+            "La quasi-totalité du cycle est du temps d'attente avant planification "
+            "— l'exécution sur site est quasi immédiate (&lt;1j)."
+        )
+
+    if not comments:
+        return ""
+    return "<p>" + " ".join(comments) + "</p>"
+
+
+def _generate_aging_comment(
+    aging: list[dict],
+    preventif_lots: list[dict],
+    open_wo: list[dict],
+) -> str:
+    """Génère un commentaire contextuel sur le vieillissement du backlog.
+
+    Analyse :
+    - Tranche dominante
+    - Lot préventif récent (< 21j) expliquant la tranche dominante
+    - Nombre de WO > 30j et > 90j
+    """
+    if not aging:
+        return ""
+
+    dominant = max(aging, key=lambda r: int(r.get("nb", 0)))
+    dominant_tranche = dominant.get("tranche", "")
+    dominant_nb = int(dominant.get("nb", 0))
+
+    comments = []
+
+    # Lot préventif récent (< 21j) ?
+    recent_lot = None
+    for lot in preventif_lots:
+        try:
+            lot_date = datetime.fromisoformat(str(lot["created_date"])[:10])
+            age_days = (datetime.utcnow() - lot_date).days
+            if age_days < 21:
+                recent_lot = lot
+                break
+        except (ValueError, TypeError, KeyError):
+            continue
+
+    if recent_lot and dominant_tranche in ("0-7j", "8-14j"):
+        lot_nb = int(recent_lot.get("nb", 0))
+        lot_date_fmt = _fmt_date(str(recent_lot["created_date"])[:10])
+        comments.append(
+            f"La majorité ({dominant_nb}) correspond au lot de contrats préventifs "
+            f"du {lot_date_fmt} — normal à ce stade."
+        )
+
+    # WO > 30j et > 90j
+    nb_over_30 = sum(
+        1 for w in open_wo if (w.get("age_days") or 0) > 30
+    )
+    nb_over_90 = sum(
+        1 for w in open_wo if (w.get("age_days") or 0) > 90
+    )
+    if nb_over_30 > 0:
+        over_90_part = f", dont {nb_over_90} à plus de 90 jours" if nb_over_90 > 0 else ""
+        comments.append(
+            f"Le vrai problème reste les {nb_over_30} WO à plus de 30 jours"
+            f"{over_90_part}."
+        )
+
+    if not comments:
+        return ""
+    return "<p>" + " ".join(comments) + "</p>"
+
+
 def generate_html(data: ReportData, report_date: datetime) -> str:
     """Génère le HTML complet du rapport."""
     kpis = _compute_kpi_summary(data)
@@ -111,9 +247,15 @@ def generate_html(data: ReportData, report_date: datetime) -> str:
             tech = m.get("tech_name") or "Non assigné"
             proximity_by_tech.setdefault(tech, []).append(m)
 
+    # Filter out empty weeks (e.g. current incomplete week when run Monday morning)
+    visible_trends = [
+        r for r in data.trends
+        if not (int(r.get("created", 0)) == 0 and int(r.get("closed", 0)) == 0)
+    ]
+
     # Trends chart
     max_trend = max(
-        (max(int(r.get("created", 0)), int(r.get("closed", 0))) for r in data.trends),
+        (max(int(r.get("created", 0)), int(r.get("closed", 0))) for r in visible_trends),
         default=1,
     ) or 1
 
@@ -255,7 +397,7 @@ tr:hover {{ background: #fafafa; }}
             flag = ' class="flag-arret"' if _is_centrale_arret(w.get("title", "")) else ""
             html += f'<tr><td class="wo-id">{w["workorder_id"]}</td>'
             html += f'<td{flag}>{w.get("title", "")}</td>'
-            html += f'<td>{w.get("site_name", "")}</td>'
+            html += f'<td>{_short_site_name(w.get("site_name", ""))}</td>'
             html += f'<td class="mono">{_fmt_date(w.get("created"))}</td>'
             html += f'<td>{_age_badge(w.get("age_days", 0))}</td></tr>\n'
         html += '</tbody></table>\n'
@@ -281,6 +423,14 @@ tr:hover {{ background: #fafafa; }}
             if nb > 0:
                 html += f'<tr><td>{tranche}</td><td class="mono">{nb}</td></tr>\n'
         html += '</tbody></table>\n'
+        if data.preventif_lots:
+            html += '<h3>Lots préventifs (≥ 5 WO créés le même jour)</h3>\n'
+            html += '<table><thead><tr><th>Date de création</th><th>Nb WO</th><th>Statut</th></tr></thead><tbody>\n'
+            for lot in data.preventif_lots:
+                html += f'<tr><td class="mono">{_fmt_date(str(lot["created_date"])[:10])}</td>'
+                html += f'<td class="mono">{lot["nb"]}</td>'
+                html += f'<td style="color:#86868b; font-style:italic;">en attente de planification</td></tr>\n'
+            html += '</tbody></table>\n'
 
     # In Progress table
     if data.in_progress:
@@ -290,7 +440,7 @@ tr:hover {{ background: #fafafa; }}
             flag = ' class="flag-arret"' if _is_centrale_arret(w.get("title", "")) else ""
             html += f'<tr><td class="wo-id">{w["workorder_id"]}</td>'
             html += f'<td{flag}>{w.get("title", "")}</td>'
-            html += f'<td>{w.get("site_name", "")}</td>'
+            html += f'<td>{_short_site_name(w.get("site_name", ""))}</td>'
             html += f'<td>{w.get("tech_name") or "—"}</td>'
             html += f'<td class="mono">{_fmt_date(w.get("planned"))}</td>'
             html += f'<td>{_age_badge(w.get("age_days", 0))}</td></tr>\n'
@@ -305,9 +455,9 @@ tr:hover {{ background: #fafafa; }}
             html += '<div class="match-group">\n'
             for m in matches:
                 html += '<div class="match-row">\n'
-                html += f'  <div><div class="match-wo">{m["open_title"]}</div><div class="match-site">{m["open_site"]} · {_age_badge(m.get("age_days", 0))}</div></div>\n'
+                html += f'  <div><div class="match-wo">{m["open_title"]}</div><div class="match-site">{_short_site_name(m["open_site"])} · {_age_badge(m.get("age_days", 0))}</div></div>\n'
                 html += f'  <div class="match-arrow">{m["distance_km"]} km →</div>\n'
-                html += f'  <div><div class="match-wo">{m["sched_title"]}</div><div class="match-site">{m["sched_site"]} · {_fmt_date(m.get("planned_date"))}</div></div>\n'
+                html += f'  <div><div class="match-wo">{m["sched_title"]}</div><div class="match-site">{_short_site_name(m["sched_site"])} · {_fmt_date(m.get("planned_date"))}</div></div>\n'
                 html += '</div>\n'
             html += '</div>\n'
 
@@ -316,9 +466,9 @@ tr:hover {{ background: #fafafa; }}
         html += '<div class="match-group">\n'
         for m in proximity_logistic:
             html += '<div class="match-row">\n'
-            html += f'  <div><div class="match-wo">{m["open_title"]}</div><div class="match-site">{m["open_site"]}</div></div>\n'
+            html += f'  <div><div class="match-wo">{m["open_title"]}</div><div class="match-site">{_short_site_name(m["open_site"])}</div></div>\n'
             html += f'  <div class="match-arrow">{m["distance_km"]} km →</div>\n'
-            html += f'  <div><div class="match-wo">{m["sched_title"]}</div><div class="match-site">{m["sched_site"]} · {_fmt_date(m.get("planned_date"))}</div></div>\n'
+            html += f'  <div><div class="match-wo">{m["sched_title"]}</div><div class="match-site">{_short_site_name(m["sched_site"])} · {_fmt_date(m.get("planned_date"))}</div></div>\n'
             html += '</div>\n'
         html += '</div>\n'
 
@@ -330,7 +480,7 @@ tr:hover {{ background: #fafafa; }}
     html += '<div class="section">\n'
     html += '<div class="chart-legend"><span class="legend-created">Créés</span><span class="legend-closed">Fermés</span></div>\n'
 
-    for row in data.trends:
+    for row in visible_trends:
         week_label = _fmt_date(row.get("week_start"))[:5]  # DD/MM
         created = int(row.get("created", 0))
         closed = int(row.get("closed", 0))
@@ -349,9 +499,13 @@ tr:hover {{ background: #fafafa; }}
 
     html += '</div>\n'
 
+    trend_comment = _generate_trend_comment(visible_trends)
+    if trend_comment:
+        html += trend_comment + '\n'
+
     # Trends table
     html += '<table><thead><tr><th>Semaine</th><th>Créés</th><th>Fermés</th><th>Cycle moyen (j)</th><th>Délai planif. (j)</th></tr></thead><tbody>\n'
-    for i, row in enumerate(data.trends):
+    for i, row in enumerate(visible_trends):
         created = int(row.get("created", 0))
         closed = int(row.get("closed", 0))
         cycle = row.get("avg_lifecycle_days")
@@ -360,8 +514,8 @@ tr:hover {{ background: #fafafa; }}
         # Trend arrows compared to previous week
         trend_c = ""
         if i > 0:
-            if cycle and data.trends[i - 1].get("avg_lifecycle_days"):
-                prev_cyc = float(data.trends[i - 1]["avg_lifecycle_days"])
+            if cycle and visible_trends[i - 1].get("avg_lifecycle_days"):
+                prev_cyc = float(visible_trends[i - 1]["avg_lifecycle_days"])
                 if float(cycle) > prev_cyc:
                     trend_c = ' <span class="trend-up">↗</span>'
                 elif float(cycle) < prev_cyc:
@@ -392,6 +546,10 @@ tr:hover {{ background: #fafafa; }}
         html += '</div>\n'
     html += '</div>\n'
 
+    aging_comment = _generate_aging_comment(data.aging, data.preventif_lots, data.open_wo)
+    if aging_comment:
+        html += aging_comment + '\n'
+
     # Top 10 oldest
     if top10_oldest:
         html += '<h3>Top 10 — WO les plus anciens</h3>\n'
@@ -400,7 +558,7 @@ tr:hover {{ background: #fafafa; }}
             flag = ' class="flag-arret"' if _is_centrale_arret(w.get("title", "")) else ""
             html += f'<tr><td class="wo-id">{w["workorder_id"]}</td>'
             html += f'<td{flag}>{w.get("title", "")}</td>'
-            html += f'<td>{w.get("site_name", "")}</td>'
+            html += f'<td>{_short_site_name(w.get("site_name", ""))}</td>'
             html += f'<td>{w.get("category") or "—"}</td>'
             html += f'<td class="mono">{_fmt_date(w.get("created"))}</td>'
             html += f'<td>{_age_badge(w.get("age_days", 0))}</td></tr>\n'
