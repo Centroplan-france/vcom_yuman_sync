@@ -1,0 +1,64 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Workflow: Rapport hebdomadaire Work Orders
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Génère un rapport PDF des work orders et l'envoie par email via Resend.
+# Contenu : actions prioritaires, regroupement géographique, tendances, backlog.
+#
+# Planification : Chaque lundi à 7h UTC (8h Paris hiver, 9h Paris été)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+name: 07 Weekly WO Report
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'  # Lundi 7h UTC = 8h Paris (hiver) / 9h Paris (été)
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  generate-report:
+    name: Generate & Send WO Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies (weasyprint)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 libffi-dev libcairo2
+
+      - name: Install Python dependencies
+        run: |
+          pip install poetry
+          poetry config virtualenvs.create false
+          poetry install
+
+      - name: Generate and send report
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          REPORT_FROM_EMAIL: ${{ secrets.REPORT_FROM_EMAIL }}
+          REPORT_RECIPIENT_EMAIL: ${{ secrets.REPORT_RECIPIENT_EMAIL }}
+          REPORT_CC_EMAIL: ${{ secrets.REPORT_CC_EMAIL }}
+        run: poetry run python scripts/generate_weekly_report.py
+
+      - name: Upload report artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: weekly-wo-report-${{ github.run_id }}
+          path: |
+            logs/reports/rapport_wo_semaine_*.html
+            logs/reports/rapport_wo_semaine_*.pdf
+          retention-days: 30
