@@ -48,14 +48,26 @@ def _age_class(age_days: int) -> str:
         return "age-critical"
     if age_days > 30:
         return "age-warning"
-    if age_days <= 7:
-        return "age-recent"
-    return ""
+    return "age-normal"
 
 
 def _age_badge(age_days: int) -> str:
+    """Retourne un span coloré selon l'âge du WO."""
     cls = _age_class(age_days)
-    return f'<span class="age-badge {cls}">{age_days}j</span>'
+    return f'<span class="{cls}">{age_days}j</span>'
+
+
+def _wo_id_tag(age_days: int, wo_id: str | int) -> str:
+    """Retourne un tag coloré pour l'ID du WO selon son âge."""
+    if age_days > 60:
+        cls = "tag-critical"
+    elif age_days > 30:
+        cls = "tag-warning"
+    elif age_days <= 7:
+        cls = "tag-info"
+    else:
+        cls = "tag-muted"
+    return f'<span class="tag {cls}">{wo_id}</span>'
 
 
 def _compute_kpi_summary(data: ReportData) -> dict[str, Any]:
@@ -110,7 +122,6 @@ def _generate_trend_comment(trends: list[dict]) -> str:
     comments = []
 
     if len(lifecycle_vals) >= 2:
-        # Compter les N dernières valeurs en tendance continue
         direction = None  # "up" or "down"
         streak = 1
         for i in range(len(lifecycle_vals) - 1, 0, -1):
@@ -141,7 +152,6 @@ def _generate_trend_comment(trends: list[dict]) -> str:
                 f"({first_val:.1f}j → {last_val:.1f}j)."
             )
 
-    # Ratio planif/exécution : avg_days_execution < 1j sur toutes les semaines
     exec_vals = [
         float(r["avg_days_execution"])
         for r in trends
@@ -155,7 +165,7 @@ def _generate_trend_comment(trends: list[dict]) -> str:
 
     if not comments:
         return ""
-    return "<p>" + " ".join(comments) + "</p>"
+    return '<p style="font-size: 12px; color: var(--text-muted); margin-top: 10px;">' + " ".join(comments) + "</p>"
 
 
 def _generate_aging_comment(
@@ -163,13 +173,7 @@ def _generate_aging_comment(
     preventif_lots: list[dict],
     open_wo: list[dict],
 ) -> str:
-    """Génère un commentaire contextuel sur le vieillissement du backlog.
-
-    Analyse :
-    - Tranche dominante
-    - Lot préventif récent (< 21j) expliquant la tranche dominante
-    - Nombre de WO > 30j et > 90j
-    """
+    """Génère un commentaire contextuel sur le vieillissement du backlog."""
     if not aging:
         return ""
 
@@ -179,7 +183,6 @@ def _generate_aging_comment(
 
     comments = []
 
-    # Lot préventif récent (< 21j) ?
     recent_lot = None
     for lot in preventif_lots:
         try:
@@ -192,36 +195,31 @@ def _generate_aging_comment(
             continue
 
     if recent_lot and dominant_tranche in ("0-7j", "8-14j"):
-        lot_nb = int(recent_lot.get("nb", 0))
         lot_date_fmt = _fmt_date(str(recent_lot["created_date"])[:10])
         comments.append(
             f"La majorité ({dominant_nb}) correspond au lot de contrats préventifs "
             f"du {lot_date_fmt} — normal à ce stade."
         )
 
-    # WO > 30j et > 90j
-    nb_over_30 = sum(
-        1 for w in open_wo if (w.get("age_days") or 0) > 30
-    )
-    nb_over_90 = sum(
-        1 for w in open_wo if (w.get("age_days") or 0) > 90
-    )
+    nb_over_30 = sum(1 for w in open_wo if (w.get("age_days") or 0) > 30)
+    nb_over_90 = sum(1 for w in open_wo if (w.get("age_days") or 0) > 90)
     if nb_over_30 > 0:
         over_90_part = f", dont {nb_over_90} à plus de 90 jours" if nb_over_90 > 0 else ""
         comments.append(
-            f"Le vrai problème reste les {nb_over_30} WO à plus de 30 jours"
+            f"Le vrai problème reste les <strong>{nb_over_30} WO à plus de 30 jours</strong>"
             f"{over_90_part}."
         )
 
     if not comments:
         return ""
-    return "<p>" + " ".join(comments) + "</p>"
+    return '<p style="font-size: 12px; color: var(--text-muted); margin-top: 10px;">' + " ".join(comments) + "</p>"
 
 
 def generate_html(data: ReportData, report_date: datetime) -> str:
     """Génère le HTML complet du rapport."""
     kpis = _compute_kpi_summary(data)
     date_str = report_date.strftime("%d/%m/%Y")
+    generated_str = datetime.utcnow().strftime("%d/%m/%Y")
 
     # Trend arrow for cycle
     cycle_str = f"{kpis['avg_cycle']:.1f}" if kpis["avg_cycle"] else "—"
@@ -235,6 +233,7 @@ def generate_html(data: ReportData, report_date: datetime) -> str:
     # Separate SAV and preventif WOs
     sav_wo = [w for w in data.open_wo if w.get("category") == "Dépannage SAV"]
     preventif_wo = [w for w in data.open_wo if w.get("category") == "Maintenance Préventive"]
+
     # Proximity grouped by tech
     proximity_by_tech: dict[str, list[dict]] = {}
     proximity_logistic: list[dict] = []
@@ -247,13 +246,13 @@ def generate_html(data: ReportData, report_date: datetime) -> str:
             tech = m.get("tech_name") or "Non assigné"
             proximity_by_tech.setdefault(tech, []).append(m)
 
-    # Filter out empty weeks (e.g. current incomplete week when run Monday morning)
+    # Filter out empty weeks
     visible_trends = [
         r for r in data.trends
         if not (int(r.get("created", 0)) == 0 and int(r.get("closed", 0)) == 0)
     ]
 
-    # Trends chart
+    # Trends chart scale
     max_trend = max(
         (max(int(r.get("created", 0)), int(r.get("closed", 0))) for r in visible_trends),
         default=1,
@@ -266,7 +265,7 @@ def generate_html(data: ReportData, report_date: datetime) -> str:
     # Top 10 oldest from open_wo
     top10_oldest = sorted(data.open_wo, key=lambda w: -(w.get("age_days") or 0))[:10]
 
-    # Build HTML
+    # ── HTML head + CSS ───────────────────────────────────────────────────
     html = f"""<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -276,135 +275,504 @@ def generate_html(data: ReportData, report_date: datetime) -> str:
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-* {{ margin: 0; padding: 0; box-sizing: border-box; }}
-body {{ font-family: 'DM Sans', sans-serif; background: #f5f5f7; color: #1d1d1f; line-height: 1.5; padding: 24px; }}
-.container {{ max-width: 1100px; margin: 0 auto; }}
-h1 {{ font-size: 24px; font-weight: 700; margin-bottom: 8px; }}
-h2 {{ font-size: 18px; font-weight: 600; margin: 32px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #e5e5e7; }}
-h3 {{ font-size: 15px; font-weight: 600; margin: 20px 0 10px; color: #444; }}
-.subtitle {{ color: #86868b; font-size: 14px; margin-bottom: 24px; }}
-.mono {{ font-family: 'JetBrains Mono', monospace; }}
+  :root {{
+    --bg: #f7f6f3;
+    --surface: #ffffff;
+    --text: #1a1a1a;
+    --text-muted: #6b6b6b;
+    --border: #e5e3de;
+    --accent: #2563eb;
+    --accent-light: #eff4ff;
+    --red: #dc2626;
+    --red-light: #fef2f2;
+    --orange: #ea580c;
+    --orange-light: #fff7ed;
+    --green: #16a34a;
+    --green-light: #f0fdf4;
+    --yellow: #ca8a04;
+    --yellow-light: #fefce8;
+    --purple: #7c3aed;
+    --purple-light: #f5f3ff;
+  }}
 
-/* KPI Cards */
-.kpi-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px; }}
-.kpi-card {{ background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }}
-.kpi-label {{ font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: #86868b; margin-bottom: 4px; }}
-.kpi-value {{ font-size: 28px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }}
-.kpi-detail {{ font-size: 12px; color: #86868b; margin-top: 4px; }}
-.kpi-value.blue {{ color: #0071e3; }}
-.kpi-value.orange {{ color: #f56300; }}
-.kpi-value.green {{ color: #28a745; }}
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 
-/* Tables */
-table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 16px; }}
-th {{ background: #f5f5f7; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: #86868b; padding: 10px 12px; text-align: left; font-weight: 600; }}
-td {{ padding: 10px 12px; font-size: 13px; border-top: 1px solid #f0f0f2; }}
-tr:hover {{ background: #fafafa; }}
-.wo-id {{ font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #86868b; }}
+  body {{
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 40px 20px;
+  }}
 
-/* Age badges */
-.age-badge {{ display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; font-family: 'JetBrains Mono', monospace; }}
-.age-critical {{ background: #ffe5e5; color: #d32f2f; }}
-.age-warning {{ background: #fff3e0; color: #e65100; }}
-.age-recent {{ background: #e3f2fd; color: #1565c0; }}
+  .container {{ max-width: 900px; margin: 0 auto; }}
 
-/* Alerts */
-.flag-arret {{ color: #d32f2f; font-weight: 600; }}
-.flag-arret::before {{ content: "⚠ "; }}
+  .header {{
+    margin-bottom: 48px;
+    border-bottom: 2px solid var(--text);
+    padding-bottom: 24px;
+  }}
 
-/* Trends */
-.trend-up {{ color: #d32f2f; font-weight: 700; }}
-.trend-down {{ color: #28a745; font-weight: 700; }}
-.chart-bar-row {{ display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }}
-.chart-label {{ width: 80px; font-size: 12px; color: #86868b; text-align: right; font-family: 'JetBrains Mono', monospace; }}
-.chart-bars {{ flex: 1; display: flex; gap: 2px; align-items: center; }}
-.bar-created {{ height: 20px; background: #0071e3; border-radius: 3px; }}
-.bar-closed {{ height: 20px; background: #28a745; border-radius: 3px; }}
-.bar-val {{ font-size: 11px; color: #86868b; font-family: 'JetBrains Mono', monospace; margin-left: 4px; }}
+  .header h1 {{
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    margin-bottom: 4px;
+  }}
 
-/* Aging bars */
-.aging-row {{ display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }}
-.aging-label {{ width: 60px; font-size: 13px; font-weight: 500; text-align: right; }}
-.aging-bar-bg {{ flex: 1; height: 24px; background: #f0f0f2; border-radius: 6px; overflow: hidden; }}
-.aging-bar {{ height: 100%; border-radius: 6px; display: flex; align-items: center; padding-left: 8px; }}
-.aging-bar span {{ font-size: 12px; font-weight: 600; color: white; font-family: 'JetBrains Mono', monospace; }}
-.aging-0-7 {{ background: #0071e3; }}
-.aging-8-14 {{ background: #34c759; }}
-.aging-15-30 {{ background: #ff9500; }}
-.aging-31-60 {{ background: #ff6b35; }}
-.aging-60 {{ background: #d32f2f; }}
+  .header .subtitle {{
+    color: var(--text-muted);
+    font-size: 15px;
+  }}
 
-/* Proximity */
-.match-group {{ background: white; border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }}
-.match-row {{ display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid #f0f0f2; }}
-.match-row:last-child {{ border-bottom: none; }}
-.match-arrow {{ text-align: center; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #0071e3; font-weight: 600; }}
-.match-wo {{ font-size: 13px; }}
-.match-site {{ font-size: 12px; color: #86868b; }}
+  .header .date {{
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--accent);
+    margin-top: 8px;
+  }}
 
-/* Sections */
-.section {{ background: white; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }}
-.chart-legend {{ display: flex; gap: 16px; margin-bottom: 12px; font-size: 12px; }}
-.chart-legend span::before {{ content: ""; display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 4px; vertical-align: middle; }}
-.legend-created::before {{ background: #0071e3 !important; }}
-.legend-closed::before {{ background: #28a745 !important; }}
+  .kpi-row {{
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 48px;
+  }}
 
-.footer {{ text-align: center; font-size: 12px; color: #86868b; margin-top: 32px; padding-top: 16px; border-top: 1px solid #e5e5e7; }}
+  .kpi-card {{
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+  }}
 
-@media print {{
-  body {{ padding: 12px; }}
-  .kpi-grid {{ grid-template-columns: repeat(4, 1fr); }}
-}}
+  .kpi-card .value {{
+    font-size: 32px;
+    font-weight: 700;
+    line-height: 1.1;
+    font-family: 'JetBrains Mono', monospace;
+  }}
+
+  .kpi-card .label {{
+    font-size: 12px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 4px;
+  }}
+
+  .kpi-card.danger .value  {{ color: var(--red); }}
+  .kpi-card.warning .value {{ color: var(--orange); }}
+  .kpi-card.ok .value      {{ color: var(--accent); }}
+  .kpi-card.good .value    {{ color: var(--green); }}
+
+  .section {{ margin-bottom: 48px; }}
+
+  .section-header {{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+  }}
+
+  .section-number {{
+    background: var(--text);
+    color: white;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }}
+
+  .section-header h2 {{
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0;
+  }}
+
+  .subsection {{ margin-bottom: 24px; }}
+
+  .subsection h3 {{
+    font-size: 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }}
+
+  .count-badge {{
+    background: var(--text);
+    color: white;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-family: 'JetBrains Mono', monospace;
+  }}
+
+  table {{
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--surface);
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    font-size: 13px;
+    margin-bottom: 16px;
+  }}
+
+  th {{
+    background: #fafaf8;
+    text-align: left;
+    padding: 10px 14px;
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+  }}
+
+  td {{
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }}
+
+  tr:last-child td {{ border-bottom: none; }}
+  tr:hover {{ background: #fafaf8; }}
+
+  .mono {{ font-family: 'JetBrains Mono', monospace; font-size: 12px; }}
+
+  .tag {{
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+  }}
+
+  .tag-critical {{ background: var(--red-light);    color: var(--red); }}
+  .tag-warning  {{ background: var(--orange-light);  color: var(--orange); }}
+  .tag-info     {{ background: var(--accent-light);  color: var(--accent); }}
+  .tag-muted    {{ background: #f3f3f3;              color: var(--text-muted); }}
+  .tag-green    {{ background: var(--green-light);   color: var(--green); }}
+
+  .age-critical {{ color: var(--red);    font-weight: 700; }}
+  .age-warning  {{ color: var(--orange); font-weight: 600; }}
+  .age-normal   {{ color: var(--text-muted); }}
+
+  .alert-row {{ background: var(--red-light); }}
+  .flag-arret {{ font-weight: 600; }}
+  .flag-arret::before {{ content: "⚠ "; color: var(--red); }}
+
+  .trend-up   {{ color: var(--red);   font-weight: 700; }}
+  .trend-down {{ color: var(--green); font-weight: 700; }}
+
+  /* Proximity */
+  .proximity-group {{
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 12px;
+  }}
+
+  .tech-header {{
+    font-weight: 600;
+    font-size: 15px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }}
+
+  .proximity-match {{
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 0;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+  }}
+
+  .proximity-match:first-of-type {{ border-top: none; }}
+
+  .proximity-arrow {{
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12px;
+    white-space: nowrap;
+  }}
+
+  .proximity-arrow .dist {{
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    color: var(--accent);
+    font-size: 14px;
+    display: block;
+  }}
+
+  .wo-open-side .wo-title  {{ font-weight: 600; }}
+  .wo-open-side .wo-site   {{ color: var(--text-muted); font-size: 12px; }}
+  .wo-sched-side           {{ text-align: right; }}
+  .wo-sched-side .wo-title {{ color: var(--text-muted); }}
+  .wo-sched-side .wo-date  {{ font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 12px; }}
+
+  /* Charts */
+  .chart-container {{
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    margin-bottom: 16px;
+  }}
+
+  .chart-title {{
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }}
+
+  /* Trend bar chart — vertical grouped */
+  .bar-chart {{
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    height: 140px;
+    padding-top: 20px;
+  }}
+
+  .bar-group {{
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+    justify-content: flex-end;
+  }}
+
+  .bar-pair {{
+    display: flex;
+    gap: 3px;
+    align-items: flex-end;
+    width: 100%;
+    justify-content: center;
+  }}
+
+  .bar {{
+    width: 16px;
+    border-radius: 3px 3px 0 0;
+    min-height: 2px;
+    position: relative;
+  }}
+
+  .bar-created {{ background: #cbd5e1; }}
+  .bar-closed  {{ background: var(--accent); }}
+
+  .bar-label {{
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    text-align: center;
+  }}
+
+  .bar-value {{
+    position: absolute;
+    top: -16px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    white-space: nowrap;
+  }}
+
+  .bar-created .bar-value {{ color: #94a3b8; }}
+  .bar-closed  .bar-value {{ color: var(--accent); }}
+
+  .legend {{
+    display: flex;
+    gap: 20px;
+    margin-top: 12px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }}
+
+  .legend-item {{
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }}
+
+  .legend-dot {{
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+  }}
+
+  /* Aging bar chart — vertical */
+  .aging-bars {{
+    display: flex;
+    gap: 6px;
+    align-items: flex-end;
+    height: 100px;
+    margin-bottom: 8px;
+  }}
+
+  .aging-bar-group {{
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+    justify-content: flex-end;
+  }}
+
+  .aging-bar {{
+    width: 100%;
+    max-width: 80px;
+    border-radius: 4px 4px 0 0;
+    min-height: 2px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    color: white;
+  }}
+
+  .aging-label {{
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 6px;
+    text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+  }}
+
+  .trend-table td {{ text-align: center; }}
+  .trend-table td:first-child {{ text-align: left; font-family: 'JetBrains Mono', monospace; font-size: 12px; }}
+  .trend-table td.mono {{ font-family: 'JetBrains Mono', monospace; font-size: 12px; }}
+
+  .footer {{
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-muted);
+    text-align: center;
+  }}
+
+  @media (max-width: 700px) {{
+    .kpi-row {{ grid-template-columns: repeat(2, 1fr); }}
+    .proximity-match {{ grid-template-columns: 1fr; gap: 4px; }}
+    .wo-sched-side {{ text-align: left; }}
+  }}
+
+  @media print {{
+    body {{ padding: 12px; background: white; }}
+    .kpi-row {{ grid-template-columns: repeat(4, 1fr); }}
+  }}
 </style>
 </head>
 <body>
 <div class="container">
 
-<h1>Rapport Work Orders</h1>
-<p class="subtitle">Semaine du {date_str} — VYSYNC</p>
+<!-- HEADER -->
+<div class="header">
+  <h1>Rapport Hebdomadaire — Work Orders</h1>
+  <div class="subtitle">Suivi opérationnel et planification</div>
+  <div class="date">Semaine du {date_str} — Généré le {generated_str}</div>
+</div>
 
 <!-- KPI Cards -->
-<div class="kpi-grid">
-  <div class="kpi-card">
-    <div class="kpi-label">WO Ouverts</div>
-    <div class="kpi-value blue mono">{kpis['nb_open']}</div>
-    <div class="kpi-detail">{kpis['nb_sav']} SAV · {kpis['nb_preventif']} Préventif</div>
+<div class="kpi-row">
+  <div class="kpi-card danger">
+    <div class="value">{kpis['nb_open']}</div>
+    <div class="label">WO Ouverts</div>
+    <div class="label">{kpis['nb_sav']} SAV · {kpis['nb_preventif']} Préventif</div>
+    <div class="label" style="color: var(--red); margin-top: 6px; font-weight: 600;">{sum(r['nb'] for r in data.sav_states if r['etat'] != 'planifie_actif')} SAV non planifiés — moy. {next((r['age_moyen'] for r in data.sav_states if r['etat'] == 'jamais_planifie'), '—')}j</div>
   </div>
-  <div class="kpi-card">
-    <div class="kpi-label">Planifiés</div>
-    <div class="kpi-value orange mono">{kpis['nb_scheduled']}</div>
+  <div class="kpi-card ok">
+    <div class="value">{kpis['nb_scheduled']}</div>
+    <div class="label">Planifiés</div>
   </div>
-  <div class="kpi-card">
-    <div class="kpi-label">En cours</div>
-    <div class="kpi-value green mono">{kpis['nb_in_progress']}</div>
+  <div class="kpi-card warning">
+    <div class="value">{kpis['nb_in_progress']}</div>
+    <div class="label">En cours</div>
   </div>
-  <div class="kpi-card">
-    <div class="kpi-label">Cycle moyen</div>
-    <div class="kpi-value mono">{cycle_str}j{cycle_trend}</div>
-    <div class="kpi-detail">Création → Clôture (internes)</div>
+  <div class="kpi-card good">
+    <div class="value">{cycle_str}j{cycle_trend}</div>
+    <div class="label">Cycle moyen</div>
+    <div class="label">Création → Clôture (internes)</div>
   </div>
 </div>
 """
 
     # ── Bloc 1: Actions prioritaires ──────────────────────────────────────
-    html += '<h2>1. Actions prioritaires</h2>\n'
+    html += '<div class="section">\n'
+    html += '<div class="section-header"><div class="section-number">1</div><h2>Actions prioritaires</h2></div>\n'
 
     # SAV table
     if sav_wo:
-        html += '<h3>Dépannage SAV — WO ouverts</h3>\n'
-        html += '<table><thead><tr><th>ID</th><th>Titre</th><th>Site</th><th>Créé le</th><th>Âge</th></tr></thead><tbody>\n'
+        html += f'<div class="subsection"><h3>Dépannage SAV — WO ouverts <span class="count-badge">{len(sav_wo)}</span></h3>\n'
+        html += '<table><thead><tr><th>WO</th><th>Site</th><th>Titre</th><th>Créé le</th><th>Âge</th></tr></thead><tbody>\n'
         for w in sav_wo:
-            flag = ' class="flag-arret"' if _is_centrale_arret(w.get("title", "")) else ""
-            html += f'<tr><td class="wo-id">{w["workorder_id"]}</td>'
-            html += f'<td{flag}>{w.get("title", "")}</td>'
+            age = w.get("age_days", 0)
+            is_arret = _is_centrale_arret(w.get("title", ""))
+            row_class = ' class="alert-row"' if is_arret else ""
+            title_html = f'<strong>{w.get("title", "")}</strong>' if is_arret else w.get("title", "")
+            html += f'<tr{row_class}>'
+            html += f'<td>{_wo_id_tag(age, w["workorder_id"])}</td>'
             html += f'<td>{_short_site_name(w.get("site_name", ""))}</td>'
+            html += f'<td{"  class=\"flag-arret\"" if is_arret else ""}>{title_html}</td>'
             html += f'<td class="mono">{_fmt_date(w.get("created"))}</td>'
-            html += f'<td>{_age_badge(w.get("age_days", 0))}</td></tr>\n'
-        html += '</tbody></table>\n'
+            html += f'<td class="{_age_class(age)}">{age}j</td>'
+            html += '</tr>\n'
+        html += '</tbody></table></div>\n'
+
+    # SAV states table
+    if data.sav_states:
+        label_map = {
+            "jamais_planifie": ("Jamais planifié", "tag-critical"),
+            "deplanifie":      ("Dé-planifié",     "tag-warning"),
+            "planifie_actif":  ("Planifié actif",  "tag-green"),
+        }
+        html += '<div class="subsection"><h3>État de planification — SAV</h3>\n'
+        html += '<table><thead><tr><th>État</th><th>Nb WO</th><th>Âge moyen</th><th>Âge max</th></tr></thead><tbody>\n'
+        for r in data.sav_states:
+            label, cls = label_map.get(r["etat"], (r["etat"], "tag-muted"))
+            html += f'<tr>'
+            html += f'<td><span class="tag {cls}">{label}</span></td>'
+            html += f'<td class="mono">{r["nb"]}</td>'
+            html += f'<td class="{_age_class(int(r["age_moyen"]))}">{r["age_moyen"]}j</td>'
+            html += f'<td class="{_age_class(r["age_max"])}">{r["age_max"]}j</td>'
+            html += '</tr>\n'
+        html += '</tbody></table></div>\n'
+
 
     # Preventif summary by age bracket
     if preventif_wo:
-        html += '<h3>Maintenance Préventive — Résumé par ancienneté</h3>\n'
+        html += f'<div class="subsection"><h3>Maintenance Préventive — Résumé par ancienneté <span class="count-badge">{len(preventif_wo)}</span></h3>\n'
         brackets = {"0-7j": 0, "8-14j": 0, "15-30j": 0, "31-60j": 0, "60j+": 0}
         for w in preventif_wo:
             age = w.get("age_days", 0)
@@ -423,152 +791,204 @@ tr:hover {{ background: #fafafa; }}
             if nb > 0:
                 html += f'<tr><td>{tranche}</td><td class="mono">{nb}</td></tr>\n'
         html += '</tbody></table>\n'
+
         if data.preventif_lots:
-            html += '<h3>Lots préventifs (≥ 5 WO créés le même jour)</h3>\n'
+            html += '<div class="subsection"><h3>Lots préventifs <span class="count-badge">≥5/j</span></h3>\n'
             html += '<table><thead><tr><th>Date de création</th><th>Nb WO</th><th>Statut</th></tr></thead><tbody>\n'
             for lot in data.preventif_lots:
                 html += f'<tr><td class="mono">{_fmt_date(str(lot["created_date"])[:10])}</td>'
                 html += f'<td class="mono">{lot["nb"]}</td>'
-                html += f'<td style="color:#86868b; font-style:italic;">en attente de planification</td></tr>\n'
-            html += '</tbody></table>\n'
+                html += f'<td style="color: var(--text-muted); font-style: italic;">en attente de planification</td></tr>\n'
+            html += '</tbody></table></div>\n'
+
+        html += '</div>\n'  # close subsection préventif
 
     # In Progress table
     if data.in_progress:
-        html += '<h3>WO En Cours</h3>\n'
-        html += '<table><thead><tr><th>ID</th><th>Titre</th><th>Site</th><th>Technicien</th><th>Planifié</th><th>Âge</th></tr></thead><tbody>\n'
+        html += f'<div class="subsection"><h3>WO En Cours <span class="count-badge">{len(data.in_progress)}</span></h3>\n'
+        html += '<table><thead><tr><th>WO</th><th>Titre</th><th>Site</th><th>Technicien</th><th>Planifié</th><th>Âge</th></tr></thead><tbody>\n'
         for w in data.in_progress:
-            flag = ' class="flag-arret"' if _is_centrale_arret(w.get("title", "")) else ""
-            html += f'<tr><td class="wo-id">{w["workorder_id"]}</td>'
-            html += f'<td{flag}>{w.get("title", "")}</td>'
+            age = w.get("age_days", 0)
+            is_arret = _is_centrale_arret(w.get("title", ""))
+            row_class = ' class="alert-row"' if is_arret else ""
+            html += f'<tr{row_class}>'
+            html += f'<td>{_wo_id_tag(age, w["workorder_id"])}</td>'
+            html += f'<td{"  class=\"flag-arret\"" if is_arret else ""}>{w.get("title", "")}</td>'
             html += f'<td>{_short_site_name(w.get("site_name", ""))}</td>'
             html += f'<td>{w.get("tech_name") or "—"}</td>'
             html += f'<td class="mono">{_fmt_date(w.get("planned"))}</td>'
-            html += f'<td>{_age_badge(w.get("age_days", 0))}</td></tr>\n'
-        html += '</tbody></table>\n'
+            html += f'<td class="{_age_class(age)}">{age}j</td>'
+            html += '</tr>\n'
+        html += '</tbody></table></div>\n'
+
+    html += '</div>\n'  # close section 1
 
     # ── Bloc 2: Regroupement géographique ─────────────────────────────────
-    html += f'<h2>2. Opportunités de regroupement géographique ({len(data.proximity)} matchs)</h2>\n'
+    html += '<div class="section">\n'
+    html += f'<div class="section-header"><div class="section-number">2</div><h2>Opportunités de regroupement géographique ({len(data.proximity)} matchs)</h2></div>\n'
 
     if proximity_by_tech:
         for tech, matches in sorted(proximity_by_tech.items()):
-            html += f'<h3>{tech} — {len(matches)} opportunité{"s" if len(matches) > 1 else ""}</h3>\n'
-            html += '<div class="match-group">\n'
+            nb = len(matches)
+            html += '<div class="proximity-group">\n'
+            html += f'<div class="tech-header">{tech} <span class="count-badge">{nb} opportunité{"s" if nb > 1 else ""}</span></div>\n'
             for m in matches:
-                html += '<div class="match-row">\n'
-                html += f'  <div><div class="match-wo">{m["open_title"]}</div><div class="match-site">{_short_site_name(m["open_site"])} · {_age_badge(m.get("age_days", 0))}</div></div>\n'
-                html += f'  <div class="match-arrow">{m["distance_km"]} km →</div>\n'
-                html += f'  <div><div class="match-wo">{m["sched_title"]}</div><div class="match-site">{_short_site_name(m["sched_site"])} · {_fmt_date(m.get("planned_date"))}</div></div>\n'
+                age = m.get("age_days", 0)
+                html += '<div class="proximity-match">\n'
+                html += f'  <div class="wo-open-side"><div class="wo-title">{m["open_title"]}</div>'
+                html += f'  <div class="wo-site">{_short_site_name(m["open_site"])} · <span class="{_age_class(age)}">{age}j</span></div></div>\n'
+                html += f'  <div class="proximity-arrow"><span class="dist">{m["distance_km"]} km</span>→</div>\n'
+                html += f'  <div class="wo-sched-side"><div class="wo-title">{m["sched_title"]}</div>'
+                html += f'  <div class="wo-site">{_short_site_name(m["sched_site"])} · {_fmt_date(m.get("planned_date"))}</div></div>\n'
                 html += '</div>\n'
             html += '</div>\n'
 
     if proximity_logistic:
-        html += f'<h3>Autres matchs notables (logistique) — {len(proximity_logistic)}</h3>\n'
-        html += '<div class="match-group">\n'
+        nb = len(proximity_logistic)
+        html += '<div class="proximity-group">\n'
+        html += f'<div class="tech-header">Autres matchs notables (logistique) <span class="count-badge">{nb}</span></div>\n'
         for m in proximity_logistic:
-            html += '<div class="match-row">\n'
-            html += f'  <div><div class="match-wo">{m["open_title"]}</div><div class="match-site">{_short_site_name(m["open_site"])}</div></div>\n'
-            html += f'  <div class="match-arrow">{m["distance_km"]} km →</div>\n'
-            html += f'  <div><div class="match-wo">{m["sched_title"]}</div><div class="match-site">{_short_site_name(m["sched_site"])} · {_fmt_date(m.get("planned_date"))}</div></div>\n'
+            html += '<div class="proximity-match">\n'
+            html += f'  <div class="wo-open-side"><div class="wo-title">{m["open_title"]}</div>'
+            html += f'  <div class="wo-site">{_short_site_name(m["open_site"])}</div></div>\n'
+            html += f'  <div class="proximity-arrow"><span class="dist">{m["distance_km"]} km</span>→</div>\n'
+            html += f'  <div class="wo-sched-side"><div class="wo-title">{m["sched_title"]}</div>'
+            html += f'  <div class="wo-site">{_short_site_name(m["sched_site"])} · {_fmt_date(m.get("planned_date"))}</div></div>\n'
             html += '</div>\n'
         html += '</div>\n'
 
     if not data.proximity:
-        html += '<p style="color: #86868b; font-style: italic;">Aucune opportunité de regroupement identifiée cette semaine.</p>\n'
+        html += '<p style="color: var(--text-muted); font-style: italic;">Aucune opportunité de regroupement identifiée cette semaine.</p>\n'
+
+    html += '</div>\n'  # close section 2
 
     # ── Bloc 3: Indicateurs de performance ────────────────────────────────
-    html += '<h2>3. Indicateurs de performance</h2>\n'
     html += '<div class="section">\n'
-    html += '<div class="chart-legend"><span class="legend-created">Créés</span><span class="legend-closed">Fermés</span></div>\n'
+    html += '<div class="section-header"><div class="section-number">3</div><h2>Indicateurs de performance</h2></div>\n'
 
+    # Graphique vertical groupé créés/fermés
+    html += '<div class="chart-container">\n'
+    html += '<div class="chart-title">WO créés vs fermés par semaine (équipe interne)</div>\n'
+    html += '<div class="bar-chart">\n'
     for row in visible_trends:
         week_label = _fmt_date(row.get("week_start"))[:5]  # DD/MM
         created = int(row.get("created", 0))
         closed = int(row.get("closed", 0))
-        w_created = max(int(created / max_trend * 300), 2) if created else 0
-        w_closed = max(int(closed / max_trend * 300), 2) if closed else 0
-        html += '<div class="chart-bar-row">\n'
-        html += f'  <div class="chart-label">{week_label}</div>\n'
-        html += '  <div class="chart-bars">\n'
-        if w_created:
-            html += f'    <div class="bar-created" style="width:{w_created}px"></div>\n'
-        if w_closed:
-            html += f'    <div class="bar-closed" style="width:{w_closed}px"></div>\n'
-        html += f'    <div class="bar-val">{created}/{closed}</div>\n'
+        h_created = max(int(created / max_trend * 120), 2) if created else 0
+        h_closed = max(int(closed / max_trend * 120), 2) if closed else 0
+        html += '<div class="bar-group">\n'
+        html += '  <div class="bar-pair">\n'
+        if h_created:
+            html += f'    <div class="bar bar-created" style="height:{h_created}px;"><div class="bar-value">{created}</div></div>\n'
+        if h_closed:
+            html += f'    <div class="bar bar-closed" style="height:{h_closed}px;"><div class="bar-value">{closed}</div></div>\n'
         html += '  </div>\n'
+        html += f'  <div class="bar-label">{week_label}</div>\n'
         html += '</div>\n'
-
+    html += '</div>\n'  # bar-chart
+    html += '<div class="legend">\n'
+    html += '  <div class="legend-item"><div class="legend-dot" style="background:#cbd5e1;"></div> Créés</div>\n'
+    html += '  <div class="legend-item"><div class="legend-dot" style="background:var(--accent);"></div> Fermés (internes)</div>\n'
     html += '</div>\n'
+    html += '</div>\n'  # chart-container
 
     trend_comment = _generate_trend_comment(visible_trends)
     if trend_comment:
         html += trend_comment + '\n'
 
     # Trends table
-    html += '<table><thead><tr><th>Semaine</th><th>Créés</th><th>Fermés</th><th>Cycle moyen (j)</th><th>Délai planif. (j)</th></tr></thead><tbody>\n'
+    html += '<div class="chart-container">\n'
+    html += '<div class="chart-title">Temps moyen de cycle (création → clôture) par semaine</div>\n'
+    html += '<table class="trend-table"><thead><tr><th>Semaine</th><th>WO fermés</th><th>Cycle moyen</th><th>Dont planification</th><th>Tendance</th></tr></thead><tbody>\n'
     for i, row in enumerate(visible_trends):
         created = int(row.get("created", 0))
         closed = int(row.get("closed", 0))
         cycle = row.get("avg_lifecycle_days")
         plan = row.get("avg_days_to_plan")
 
-        # Trend arrows compared to previous week
         trend_c = ""
-        if i > 0:
-            if cycle and visible_trends[i - 1].get("avg_lifecycle_days"):
-                prev_cyc = float(visible_trends[i - 1]["avg_lifecycle_days"])
-                if float(cycle) > prev_cyc:
-                    trend_c = ' <span class="trend-up">↗</span>'
-                elif float(cycle) < prev_cyc:
-                    trend_c = ' <span class="trend-down">↘</span>'
+        cycle_color = ""
+        if i > 0 and cycle and visible_trends[i - 1].get("avg_lifecycle_days"):
+            prev_cyc = float(visible_trends[i - 1]["avg_lifecycle_days"])
+            if float(cycle) > prev_cyc:
+                trend_c = f'<span class="trend-up">↗ +{float(cycle) - prev_cyc:.1f}j</span>'
+                cycle_color = ' style="color: var(--red);"'
+            elif float(cycle) < prev_cyc:
+                trend_c = f'<span class="trend-down">↘ -{prev_cyc - float(cycle):.1f}j</span>'
+                cycle_color = ' style="color: var(--green);"'
 
-        html += f'<tr><td class="mono">{_fmt_date(row.get("week_start"))}</td>'
-        html += f'<td class="mono">{created}</td>'
+        is_last = (i == len(visible_trends) - 1)
+        row_style = ' style="font-weight: 600;"' if is_last else ""
+        html += f'<tr{row_style}>'
+        html += f'<td>{_fmt_date(row.get("week_start"))}</td>'
         html += f'<td class="mono">{closed}</td>'
-        html += f'<td class="mono">{cycle or "—"}{trend_c}</td>'
-        html += f'<td class="mono">{plan or "—"}</td></tr>\n'
+        html += f'<td class="mono"{cycle_color}>{cycle or "—"}j</td>'
+        html += f'<td class="mono">{plan or "—"}j</td>'
+        html += f'<td>{trend_c}</td>'
+        html += '</tr>\n'
     html += '</tbody></table>\n'
+    html += '</div>\n'  # chart-container
+
+    html += '</div>\n'  # close section 3
 
     # ── Bloc 4: Vieillissement du backlog ─────────────────────────────────
-    html += '<h2>4. Vieillissement du backlog</h2>\n'
-
-    # Aging bars
-    aging_colors = {"0-7j": "aging-0-7", "8-14j": "aging-8-14", "15-30j": "aging-15-30", "31-60j": "aging-31-60", "60j+": "aging-60"}
     html += '<div class="section">\n'
+    html += '<div class="section-header"><div class="section-number">4</div><h2>Vieillissement du backlog</h2></div>\n'
+
+    # Graphique vertical vieillissement
+    aging_colors = {
+        "0-7j":   "#16a34a",
+        "8-14j":  "#2563eb",
+        "15-30j": "#ca8a04",
+        "31-60j": "#ea580c",
+        "60j+":   "#dc2626",
+    }
+    html += '<div class="chart-container">\n'
+    html += f'<div class="chart-title">Distribution des {total_open} WO ouverts par tranche d\'âge</div>\n'
+    html += '<div class="aging-bars">\n'
     for row in data.aging:
         tranche = row.get("tranche", "")
         nb = int(row.get("nb", 0))
-        pct = nb / total_open * 100 if total_open else 0
-        bar_w = nb / max_aging * 100
-        cls = aging_colors.get(tranche, "aging-0-7")
-        html += '<div class="aging-row">\n'
+        bar_h = max(int(nb / max_aging * 90), 2) if nb else 0
+        color = aging_colors.get(tranche, "#6b6b6b")
+        html += '<div class="aging-bar-group">\n'
+        html += f'  <div class="aging-bar" style="height:{bar_h}px; background:{color};">{nb}</div>\n'
         html += f'  <div class="aging-label">{tranche}</div>\n'
-        html += f'  <div class="aging-bar-bg"><div class="aging-bar {cls}" style="width:{bar_w:.0f}%"><span>{nb} ({pct:.0f}%)</span></div></div>\n'
         html += '</div>\n'
-    html += '</div>\n'
+    html += '</div>\n'  # aging-bars
 
     aging_comment = _generate_aging_comment(data.aging, data.preventif_lots, data.open_wo)
     if aging_comment:
         html += aging_comment + '\n'
 
+    html += '</div>\n'  # chart-container
+
     # Top 10 oldest
     if top10_oldest:
-        html += '<h3>Top 10 — WO les plus anciens</h3>\n'
-        html += '<table><thead><tr><th>ID</th><th>Titre</th><th>Site</th><th>Catégorie</th><th>Créé le</th><th>Âge</th></tr></thead><tbody>\n'
+        html += '<div class="subsection"><h3>Top 10 — WO les plus anciens</h3>\n'
+        html += '<table><thead><tr><th>WO</th><th>Site</th><th>Type</th><th>Titre</th><th>Âge</th></tr></thead><tbody>\n'
         for w in top10_oldest:
-            flag = ' class="flag-arret"' if _is_centrale_arret(w.get("title", "")) else ""
-            html += f'<tr><td class="wo-id">{w["workorder_id"]}</td>'
-            html += f'<td{flag}>{w.get("title", "")}</td>'
+            age = w.get("age_days", 0)
+            is_arret = _is_centrale_arret(w.get("title", ""))
+            row_class = ' class="alert-row"' if is_arret else ""
+            cat = w.get("category") or "—"
+            cat_cls = "tag-critical" if cat == "Dépannage SAV" else "tag-info"
+            html += f'<tr{row_class}>'
+            html += f'<td>{_wo_id_tag(age, w["workorder_id"])}</td>'
             html += f'<td>{_short_site_name(w.get("site_name", ""))}</td>'
-            html += f'<td>{w.get("category") or "—"}</td>'
-            html += f'<td class="mono">{_fmt_date(w.get("created"))}</td>'
-            html += f'<td>{_age_badge(w.get("age_days", 0))}</td></tr>\n'
-        html += '</tbody></table>\n'
+            html += f'<td><span class="tag {cat_cls}">{cat}</span></td>'
+            html += f'<td{"  class=\"flag-arret\"" if is_arret else ""}>{w.get("title", "")}</td>'
+            html += f'<td class="{_age_class(age)}">{age}j</td>'
+            html += '</tr>\n'
+        html += '</tbody></table></div>\n'
+
+    html += '</div>\n'  # close section 4
 
     # Footer
     now_str = datetime.utcnow().strftime("%d/%m/%Y à %H:%M UTC")
     html += f"""
 <div class="footer">
-  Rapport généré automatiquement le {now_str} — VYSYNC
+  Rapport généré automatiquement par VYSYNC — Données Supabase au {now_str}
 </div>
 
 </div>
@@ -636,11 +1056,11 @@ def generate_email_summary(data: ReportData, report_date: datetime) -> tuple[str
     text += "Le rapport complet est en pièce jointe (PDF).\n"
 
     # ── HTML version ──
-    html = f"""<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; color: #1d1d1f;">
+    html = f"""<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; color: #1a1a1a;">
 <h2 style="margin-bottom: 4px;">Rapport WO — Semaine du {date_str}</h2>
-<hr style="border: none; border-top: 1px solid #e5e5e7; margin: 12px 0;">
+<hr style="border: none; border-top: 1px solid #e5e3de; margin: 12px 0;">
 
-<h3 style="font-size: 14px; color: #444;">📊 Situation actuelle</h3>
+<h3 style="font-size: 14px; color: #6b6b6b;">📊 Situation actuelle</h3>
 <ul style="font-size: 14px; line-height: 1.8;">
   <li><strong>{kpis['nb_open']}</strong> WO ouverts (dont {kpis['nb_sav']} SAV et {kpis['nb_preventif']} préventifs)</li>
   <li><strong>{kpis['nb_scheduled']}</strong> planifiés, <strong>{kpis['nb_in_progress']}</strong> en cours</li>
@@ -649,13 +1069,13 @@ def generate_email_summary(data: ReportData, report_date: datetime) -> tuple[str
 """
 
     if urgences:
-        html += '<h3 style="font-size: 14px; color: #d32f2f; margin-top: 16px;">🔴 Urgences</h3>\n'
+        html += '<h3 style="font-size: 14px; color: #dc2626; margin-top: 16px;">🔴 Urgences</h3>\n'
         html += '<ul style="font-size: 14px; line-height: 1.8;">\n'
         for u in urgences:
             html += f"  <li>{u}</li>\n"
         html += "</ul>\n"
 
-    html += f'<h3 style="font-size: 14px; color: #444; margin-top: 16px;">📍 Opportunités de regroupement ({len(data.proximity)} identifiées)</h3>\n'
+    html += f'<h3 style="font-size: 14px; color: #6b6b6b; margin-top: 16px;">📍 Opportunités de regroupement ({len(data.proximity)} identifiées)</h3>\n'
     if top_prox:
         html += '<ul style="font-size: 14px; line-height: 1.8;">\n'
         for m in top_prox:
@@ -663,14 +1083,14 @@ def generate_email_summary(data: ReportData, report_date: datetime) -> tuple[str
         html += "</ul>\n"
 
     if old_ip:
-        html += '<h3 style="font-size: 14px; color: #e65100; margin-top: 16px;">⚠ À vérifier</h3>\n'
+        html += '<h3 style="font-size: 14px; color: #ea580c; margin-top: 16px;">⚠ À vérifier</h3>\n'
         html += '<ul style="font-size: 14px; line-height: 1.8;">\n'
         html += f"  <li>{len(old_ip)} WO In Progress &gt; 14 jours</li>\n"
         html += "</ul>\n"
 
     html += """
-<hr style="border: none; border-top: 1px solid #e5e5e7; margin: 16px 0;">
-<p style="font-size: 13px; color: #86868b;">Le rapport complet est en pièce jointe (PDF).</p>
+<hr style="border: none; border-top: 1px solid #e5e3de; margin: 16px 0;">
+<p style="font-size: 13px; color: #6b6b6b;">Le rapport complet est en pièce jointe (PDF).</p>
 </div>"""
 
     return html, text

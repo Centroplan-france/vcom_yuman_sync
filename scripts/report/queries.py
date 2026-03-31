@@ -99,6 +99,57 @@ WHERE wo.status = 'In progress'
 ORDER BY age_days DESC;
 """
 
+# ── Bloc 1c — États des WO Open (planification) ───────────────────────────────
+
+SQL_SAV_STATES = """
+WITH wo_state AS (
+  SELECT
+    wo.workorder_id,
+    wo.title,
+    wo.yuman_created_at::date AS created,
+    EXTRACT(DAY FROM now() - wo.yuman_created_at)::int AS age_days,
+    wc.name AS category,
+    sm.name AS site_name,
+    wo.technician_id,
+    EXISTS (
+      SELECT 1 FROM jsonb_array_elements(wo.wo_history) e
+      WHERE e->>'status' = 'Scheduled'
+    ) AS ever_scheduled,
+    (
+      SELECT min((e->>'changed_at')::timestamptz)
+      FROM jsonb_array_elements(wo.wo_history) e
+      WHERE e->>'status' = 'Scheduled'
+    ) AS first_scheduled_at
+  FROM work_orders wo
+  JOIN sites_mapping sm ON wo.site_id = sm.yuman_site_id
+  LEFT JOIN workorder_categories wc ON wo.category_id = wc.id
+  WHERE wo.status = 'Open'
+    AND wc.name = 'Dépannage SAV'
+),
+classified AS (
+  SELECT *,
+    CASE
+      WHEN ever_scheduled AND technician_id IS NULL THEN 'deplanifie'
+      WHEN NOT ever_scheduled                       THEN 'jamais_planifie'
+      ELSE                                               'planifie_actif'
+    END AS etat
+  FROM wo_state
+)
+SELECT
+  etat,
+  count(*)                          AS nb,
+  round(avg(age_days)::numeric, 1)  AS age_moyen,
+  max(age_days)                     AS age_max
+FROM classified
+GROUP BY etat
+ORDER BY
+  CASE etat
+    WHEN 'jamais_planifie' THEN 1
+    WHEN 'deplanifie'      THEN 2
+    WHEN 'planifie_actif'  THEN 3
+  END;
+"""
+
 # ── Bloc 2 — Proximité géographique (75 km, 14 jours) ────────────────────────
 
 SQL_PROXIMITY = """
@@ -237,6 +288,7 @@ class ReportData:
     trends: list[dict]
     aging: list[dict]
     preventif_lots: list[dict]
+    sav_states: list[dict]
 
 
 def fetch_all() -> ReportData:
@@ -268,6 +320,9 @@ def fetch_all() -> ReportData:
         preventif_lots = _exec(conn, SQL_PREVENTIF_LOTS)
         logger.info(f"[REPORT] Lots préventifs: {len(preventif_lots)} lots")
 
+        sav_states = _exec(conn, SQL_SAV_STATES)
+        logger.info(f"[REPORT] SAV states: {len(sav_states)} états")
+
         return ReportData(
             kpis=kpis,
             open_wo=open_wo,
@@ -276,6 +331,7 @@ def fetch_all() -> ReportData:
             trends=trends,
             aging=aging,
             preventif_lots=preventif_lots,
+            sav_states=sav_states,
         )
     finally:
         conn.close()
