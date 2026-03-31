@@ -60,7 +60,7 @@ from vysync.models import (
 # UTILITAIRES
 # ═══════════════════════════════════════════════════════════════════════════════
 
-from vysync.utils import normalize_site_name
+from vysync.utils import normalize_site_name, norm_serial
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -337,12 +337,26 @@ def sync_supabase_to_yuman(
             ignore_fields={"vcom_system_key", "parent_id", "name"}
         )
 
+        # Charger les serials des équipements obsolètes pour exclure leurs DELETE fantômes
+        _obs_res = sb.sb.table("equipments_mapping").select("serial_number").eq("is_obsolete", True).execute()
+        obsolete_serials: set[str] = {
+            norm_serial(r["serial_number"])
+            for r in (_obs_res.data or [])
+            if r.get("serial_number")
+        }
+
         # RÈGLE MÉTIER : Pour les SIM, Yuman est source de vérité
         # → On permet la CRÉATION de SIM, mais pas la mise à jour ni la suppression
+        # Les équipements obsolètes en Supabase ne sont pas à supprimer dans Yuman
+        # (le code DELETE est désactivé ; les garder dans le diff créerait des fantômes permanents)
         patch_equips = PatchSet(
             add=patch_equips_raw.add,  # Garder toutes les créations (y compris SIM)
             update=[(old, new) for old, new in patch_equips_raw.update if new.category_id != CAT_SIM],
-            delete=[e for e in patch_equips_raw.delete if e.category_id != CAT_SIM],
+            delete=[
+                e for e in patch_equips_raw.delete
+                if e.category_id != CAT_SIM
+                and norm_serial(e.serial_number) not in obsolete_serials
+            ],
         )
         
         logger.info("Diff équipements: +%d ~%d -%d",
