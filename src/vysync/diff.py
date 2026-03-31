@@ -193,7 +193,6 @@ def _equip_equals(a: Equipment, b: Equipment, ignore_fields: Optional[Set[str]] 
             da["serial_number"]       == db["serial_number"] and
             da["vcom_device_id"]      == db["vcom_device_id"] and
             da["name"]                == db["name"] and
-            da["name_inverter"]       == db["name_inverter"] and
             da["carport"]             == db["carport"]
         )
     elif cat == CAT_CENTRALE:

@@ -30,6 +30,7 @@ from vysync.models import (
 )
 from vysync.yuman_client import YumanClient
 from vysync.adapters.supabase_adapter import SupabaseAdapter
+from vysync.utils import norm_serial
 import re
 from datetime import datetime, timezone
 def _now_iso() -> str:
@@ -294,7 +295,7 @@ class YumanAdapter:
             object.__setattr__(equip, "module_brand", module_brand)
             object.__setattr__(equip, "module_model", module_model)
 
-            equips[m["serial_number"]] = equip  # clé = serial_number
+            equips[norm_serial(m["serial_number"])] = equip  # clé = serial normalisé
 
         logger.debug("[YUMAN] snapshot: %s equips", len(equips))
         dump("[YUMAN] snapshot equips", equips)
@@ -384,8 +385,8 @@ class YumanAdapter:
                 site_patch["client_id"] = new_client_id
 
             # System Key
-            old_vcom = old.get_vcom_system_key(self.sb)
-            new_vcom = new.get_vcom_system_key(self.sb)
+            old_vcom = old.vcom_system_key  # valeur réelle lue depuis Yuman
+            new_vcom = new.get_vcom_system_key(self.sb)  # valeur Supabase
             if old_vcom != new_vcom and new_vcom:
                 fields_patch.append({
                     "blueprint_id": SITE_FIELDS["System Key (Vcom ID)"],
