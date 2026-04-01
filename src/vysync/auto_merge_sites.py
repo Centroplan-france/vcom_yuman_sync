@@ -25,19 +25,17 @@ Usage:
 import argparse
 import json
 import os
-import smtplib
 import sys
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from typing import Any, Dict, List, Optional, Tuple
 import logging
 
 from supabase import create_client, Client
 
 from vysync.adapters.supabase_adapter import SupabaseAdapter
+from vysync.email_sender import send_email
 from vysync.sync_new_sites import _load_region_client_mapping, _extract_region
 
 
@@ -395,30 +393,21 @@ def merge_single_pair(
 # EMAIL
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def send_alert_email(unmatched_vcom: List[SiteInfo], 
+def send_alert_email(unmatched_vcom: List[SiteInfo],
                      merge_results: List[MergeResult],
                      failed_merges: List[MergeResult]) -> bool:
     """
     Envoie un email d'alerte si des sites VCOM n'ont pas de paire
     ou si des fusions ont échoué.
     """
-    smtp_host = os.getenv("SMTP_HOST")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("SMTP_USER")
-    smtp_password = os.getenv("SMTP_PASSWORD")
-    
-    if not all([smtp_host, smtp_user, smtp_password]):
-        logger.warning("[EMAIL] Variables SMTP manquantes, email non envoyé")
-        return False
-    
     # Construire le contenu
     subject = "[VYSYNC] Alerte fusion sites VCOM/Yuman"
-    
+
     body_parts = []
     body_parts.append("Rapport de fusion automatique des sites VCOM ↔ Yuman")
     body_parts.append(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     body_parts.append("")
-    
+
     # Résumé des fusions
     successful = [r for r in merge_results if r.success]
     body_parts.append(f"=== FUSIONS RÉUSSIES: {len(successful)} ===")
@@ -426,14 +415,14 @@ def send_alert_email(unmatched_vcom: List[SiteInfo],
         for r in successful:
             body_parts.append(f"  • VCOM id={r.vcom_id} ← Yuman id={r.yuman_id} (yuman_site_id={r.yuman_site_id})")
     body_parts.append("")
-    
+
     # Fusions échouées
     if failed_merges:
         body_parts.append(f"=== FUSIONS ÉCHOUÉES: {len(failed_merges)} ===")
         for r in failed_merges:
             body_parts.append(f"  ❌ VCOM id={r.vcom_id} ← Yuman id={r.yuman_id}: {r.error}")
         body_parts.append("")
-    
+
     # Sites VCOM sans paire
     if unmatched_vcom:
         body_parts.append(f"=== SITES VCOM SANS PAIRE YUMAN: {len(unmatched_vcom)} ===")
@@ -444,30 +433,13 @@ def send_alert_email(unmatched_vcom: List[SiteInfo],
             body_parts.append(f"  • [{s.id}] {s.vcom_system_key}: {s.name}")
             body_parts.append(f"    Adresse: {s.address or '(non renseignée)'}")
         body_parts.append("")
-    
+
     body_parts.append("---")
     body_parts.append("Ce message a été généré automatiquement par vysync.auto_merge_sites")
-    
+
     body = "\n".join(body_parts)
-    
-    # Envoyer
-    try:
-        msg = MIMEMultipart()
-        msg["From"] = "onboarding@resend.dev"
-        msg["To"] = ALERT_EMAIL
-        msg["Subject"] = subject
-        msg.attach(MIMEText(body, "plain", "utf-8"))
-        
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_password)
-            server.send_message(msg)
-        
-        logger.info(f"[EMAIL] Alerte envoyée à {ALERT_EMAIL}")
-        return True
-    except Exception as e:
-        logger.error(f"[EMAIL] Erreur envoi: {e}")
-        return False
+
+    return send_email(to=ALERT_EMAIL, subject=subject, body_text=body)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

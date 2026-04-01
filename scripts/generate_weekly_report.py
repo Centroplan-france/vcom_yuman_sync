@@ -78,10 +78,10 @@ def main() -> None:
     html_summary, text_summary = generate_email_summary(data, report_date)
 
     # 5. Envoyer l'email
-    #email_id = send_report_email(html_summary, text_summary, pdf_path, date_str)
+    result = send_report_email(html_summary, text_summary, pdf_path, date_str)
 
     logger.info("=" * 60)
-    logger.info(f"[REPORT] Rapport envoyé avec succès (email id: {email_id})")
+    logger.info(f"[REPORT] Résultat envoi email: {result}")
     logger.info("=" * 60)
 
 

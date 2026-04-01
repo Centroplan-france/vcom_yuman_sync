@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Envoi du rapport par email via le package Python resend (API HTTP)."""
+"""Envoi du rapport par email via le module centralisé SendGrid."""
 
 from __future__ import annotations
 
-import base64
 import logging
 import os
 from pathlib import Path
@@ -17,7 +16,7 @@ def send_report_email(
     pdf_path: Path,
     date_str: str,
 ) -> str:
-    """Envoie le rapport par email via Resend.
+    """Envoie le rapport par email via SendGrid.
 
     Args:
         html_summary: Corps HTML du résumé
@@ -26,50 +25,43 @@ def send_report_email(
         date_str: Date formatée pour le sujet (DD_MM_YYYY)
 
     Returns:
-        L'ID de l'email envoyé
+        Message de statut (ex: ``"sent"`` ou ``"error: ..."``)
     """
-    import resend
+    from vysync.email_sender import send_email
 
-    api_key = os.environ.get("RESEND_API_KEY")
-    from_email = os.environ.get("REPORT_FROM_EMAIL")
     to_email = os.environ.get("REPORT_RECIPIENT_EMAIL")
     cc_email = os.environ.get("REPORT_CC_EMAIL")
 
-    if not all([api_key, from_email, to_email]):
-        raise EnvironmentError(
-            "Missing RESEND_API_KEY, REPORT_FROM_EMAIL, or REPORT_RECIPIENT_EMAIL"
-        )
+    if not to_email:
+        return "error: REPORT_RECIPIENT_EMAIL not set"
 
-    resend.api_key = api_key
-
-    # Lire et encoder le PDF en base64
-    with open(pdf_path, "rb") as f:
-        pdf_content = base64.b64encode(f.read()).decode("utf-8")
+    # Lire le PDF
+    pdf_content = pdf_path.read_bytes()
 
     subject_date = date_str.replace("_", "/")
     subject = f"[VYSYNC] Rapport WO — Semaine du {subject_date}"
 
-    params: resend.Emails.SendParams = {
-        "from": from_email,
-        "to": [to_email],
-        "subject": subject,
-        "html": html_summary,
-        "text": text_summary,
-        "attachments": [
-            {
-                "filename": f"rapport_wo_semaine_{date_str}.pdf",
-                "content": pdf_content,
-            }
-        ],
-    }
+    attachments = [
+        {
+            "filename": f"rapport_wo_semaine_{date_str}.pdf",
+            "content": pdf_content,
+            "mime_type": "application/pdf",
+        }
+    ]
 
-    # Ajouter CC si configuré
-    if cc_email:
-        params["cc"] = [cc_email]
+    logger.info("[REPORT] Envoi email à %s (CC: %s)", to_email, cc_email or "aucun")
 
-    logger.info(f"[REPORT] Envoi email à {to_email} (CC: {cc_email or 'aucun'})")
-    email = resend.Emails.send(params)
+    success = send_email(
+        to=to_email,
+        subject=subject,
+        body_text=text_summary,
+        body_html=html_summary,
+        cc=cc_email if cc_email else None,
+        attachments=attachments,
+    )
 
-    email_id = email.get("id", "unknown") if isinstance(email, dict) else getattr(email, "id", "unknown")
-    logger.info(f"[REPORT] Email envoyé avec succès (id: {email_id})")
-    return str(email_id)
+    if success:
+        logger.info("[REPORT] Email envoyé avec succès")
+        return "sent"
+
+    return "error: SendGrid send failed (see logs)"

@@ -55,11 +55,10 @@ jobs:
           # Credentials Yuman
           YUMAN_TOKEN: ${{ secrets.YUMAN_TOKEN }}
           
-          # Configuration SMTP pour les alertes (optionnel)
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          # Configuration SendGrid pour les alertes
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          SENDGRID_FROM_EMAIL: ${{ secrets.SENDGRID_FROM_EMAIL }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
           
           # Niveau de log
           LOG_LEVEL: ${{ inputs.debug == 'true' && 'DEBUG' || 'INFO' }}

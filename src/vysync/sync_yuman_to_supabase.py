@@ -29,15 +29,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-import smtplib
 from dataclasses import asdict
 from datetime import datetime, timezone
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from typing import Any, Dict, List, Optional
 
 from vysync.adapters.supabase_adapter import SupabaseAdapter
 from vysync.adapters.yuman_adapter import YumanAdapter
+from vysync.email_sender import send_email
 from vysync.models import Client, Site, Equipment, CAT_SIM
 
 # ─────────────────────────── Logger ────────────────────────────
@@ -48,7 +46,7 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-ALERT_EMAIL = "t.roquefeuil@centroplan.fr"
+ALERT_EMAIL = os.getenv("ALERT_EMAIL", "t.roquefeuil@centroplan.fr")
 
 # Champs sites à synchroniser (fill if NULL uniquement)
 SITE_FILL_FIELDS = [
@@ -87,18 +85,15 @@ from vysync.utils import norm_serial as _norm_serial
 def send_conflict_email(conflicts: List[Dict[str, Any]]) -> bool:
     """
     Envoie un email de notification pour les conflits client_map_id.
-    
-    Utilise les variables d'environnement :
-    - SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD
-    
+
     Retourne True si l'envoi a réussi, False sinon.
     """
     if not conflicts:
         return True
-    
+
     # Construction du contenu
     subject = f"[vysync] {len(conflicts)} conflit(s) client_map_id détecté(s)"
-    
+
     body_lines = [
         "Bonjour,",
         "",
@@ -109,7 +104,7 @@ def send_conflict_email(conflicts: List[Dict[str, Any]]) -> bool:
         "=" * 60,
         ""
     ]
-    
+
     for i, c in enumerate(conflicts, 1):
         body_lines.extend([
             f"[Conflit {i}]",
@@ -121,7 +116,7 @@ def send_conflict_email(conflicts: List[Dict[str, Any]]) -> bool:
             f"  client_map_id Yuman: {c['yuman_client_map_id']}",
             ""
         ])
-    
+
     body_lines.extend([
         "=" * 60,
         "",
@@ -129,43 +124,10 @@ def send_conflict_email(conflicts: List[Dict[str, Any]]) -> bool:
         "",
         "— vysync"
     ])
-    
+
     body = "\n".join(body_lines)
-    
-    # Envoi via SMTP
-    smtp_host = os.getenv("SMTP_HOST")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("SMTP_USER")
-    smtp_password = os.getenv("SMTP_PASSWORD")
-    
-    if not all([smtp_host, smtp_user, smtp_password]):
-        logger.warning("[MAIL] Variables SMTP non configurées, email non envoyé")
-        logger.info("[MAIL] Contenu du mail qui aurait été envoyé:")
-        for line in body_lines:
-            logger.info("[MAIL]   %s", line)
-        return False
-    
-    try:
-        msg = MIMEMultipart()
-        msg["From"] = smtp_user
-        msg["To"] = ALERT_EMAIL
-        msg["Subject"] = subject
-        msg.attach(MIMEText(body, "plain"))
-        
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_password)
-            server.send_message(msg)
-        
-        logger.info("[MAIL] Email envoyé à %s (%d conflits)", ALERT_EMAIL, len(conflicts))
-        return True
-        
-    except Exception as e:
-        logger.error("[MAIL] Erreur envoi email: %s", e)
-        logger.info("[MAIL] Contenu du mail:")
-        for line in body_lines:
-            logger.info("[MAIL]   %s", line)
-        return False
+
+    return send_email(to=ALERT_EMAIL, subject=subject, body_text=body)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

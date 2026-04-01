@@ -2,7 +2,7 @@
 # Workflow: Rapport hebdomadaire Work Orders
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# Génère un rapport PDF des work orders et l'envoie par email via Resend.
+# Génère un rapport PDF des work orders et l'envoie par email via SendGrid.
 # Contenu : actions prioritaires, regroupement géographique, tendances, backlog.
 #
 # Planification : Chaque lundi à 7h UTC (8h Paris hiver, 9h Paris été)
@@ -47,8 +47,8 @@ jobs:
       - name: Generate and send report
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          REPORT_FROM_EMAIL: ${{ secrets.REPORT_FROM_EMAIL }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          SENDGRID_FROM_EMAIL: ${{ secrets.SENDGRID_FROM_EMAIL }}
           REPORT_RECIPIENT_EMAIL: ${{ secrets.REPORT_RECIPIENT_EMAIL }}
           REPORT_CC_EMAIL: ${{ secrets.REPORT_CC_EMAIL }}
         run: poetry run python scripts/generate_weekly_report.py
