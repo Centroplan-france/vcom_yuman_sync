@@ -46,7 +46,8 @@ jobs:
 
       - name: Generate and send report
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           MAILJET_API_KEY: ${{ secrets.MAILJET_API_KEY }}
           MAILJET_API_SECRET: ${{ secrets.MAILJET_API_SECRET }}
           MAILJET_FROM_EMAIL: ${{ secrets.MAILJET_FROM_EMAIL }}
