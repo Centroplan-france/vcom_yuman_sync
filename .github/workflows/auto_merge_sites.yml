@@ -35,7 +35,7 @@ jobs:
           MAILJET_API_KEY: ${{ secrets.MAILJET_API_KEY }}
           MAILJET_API_SECRET: ${{ secrets.MAILJET_API_SECRET }}
           MAILJET_FROM_EMAIL: ${{ secrets.MAILJET_FROM_EMAIL }}
-          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
         run: |
           poetry run python -m vysync.auto_merge_sites --execute --output auto_merge_report.json
 

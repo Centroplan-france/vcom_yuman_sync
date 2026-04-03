@@ -50,8 +50,8 @@ jobs:
           MAILJET_API_KEY: ${{ secrets.MAILJET_API_KEY }}
           MAILJET_API_SECRET: ${{ secrets.MAILJET_API_SECRET }}
           MAILJET_FROM_EMAIL: ${{ secrets.MAILJET_FROM_EMAIL }}
-          REPORT_RECIPIENT_EMAIL: ${{ secrets.REPORT_RECIPIENT_EMAIL }}
-          REPORT_CC_EMAIL: ${{ secrets.REPORT_CC_EMAIL }}
+          REPORT_RECIPIENT_EMAIL: ${{ vars.REPORT_RECIPIENT_EMAIL }}
+          REPORT_CC_EMAIL: ${{ vars.REPORT_CC_EMAIL }}
         run: poetry run python scripts/generate_weekly_report.py
 
       - name: Upload report artifacts
