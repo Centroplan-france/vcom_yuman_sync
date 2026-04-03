@@ -1,4 +1,4 @@
-"""Module email centralisé — envoi via SendGrid Python SDK."""
+"""Module email centralisé — envoi via Mailjet Python SDK."""
 
 from __future__ import annotations
 
@@ -7,18 +7,7 @@ import logging
 import os
 from typing import List, Optional, Union
 
-import sendgrid
-from sendgrid.helpers.mail import (
-    Attachment,
-    ContentId,
-    Disposition,
-    FileContent,
-    FileName,
-    FileType,
-    Mail,
-    To,
-    Cc,
-)
+from mailjet_rest import Client
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +20,7 @@ def send_email(
     cc: Union[str, List[str], None] = None,
     attachments: Optional[List[dict]] = None,
 ) -> bool:
-    """Envoie un email via SendGrid.
+    """Envoie un email via Mailjet.
 
     Args:
         to: Destinataire(s).
@@ -42,57 +31,59 @@ def send_email(
         attachments: Liste de ``{"filename": str, "content": bytes, "mime_type": str}``.
 
     Returns:
-        ``True`` si le mail est envoyé (status 2xx), ``False`` sinon.
+        ``True`` si le mail est envoyé (status 200), ``False`` sinon.
     """
-    api_key = os.getenv("SENDGRID_API_KEY")
-    from_email = os.getenv("SENDGRID_FROM_EMAIL")
+    api_key = os.getenv("MAILJET_API_KEY")
+    api_secret = os.getenv("MAILJET_API_SECRET")
+    from_email = os.getenv("MAILJET_FROM_EMAIL")
 
-    if not api_key:
-        logger.warning("[EMAIL] SENDGRID_API_KEY absent ou vide, email non envoyé")
+    if not api_key or not api_secret:
+        logger.warning("[EMAIL] MAILJET_API_KEY ou MAILJET_API_SECRET absent, email non envoyé")
         return False
 
     if not from_email:
-        logger.warning("[EMAIL] SENDGRID_FROM_EMAIL absent ou vide, email non envoyé")
+        logger.warning("[EMAIL] MAILJET_FROM_EMAIL absent ou vide, email non envoyé")
         return False
 
     # Normaliser les destinataires
     to_list = [to] if isinstance(to, str) else list(to)
 
-    message = Mail(
-        from_email=from_email,
-        to_emails=[To(addr) for addr in to_list],
-        subject=subject,
-        plain_text_content=body_text,
-        html_content=body_html,
-    )
+    message: dict = {
+        "From": {"Email": from_email, "Name": "VYSYNC"},
+        "To": [{"Email": addr, "Name": addr} for addr in to_list],
+        "Subject": subject,
+        "TextPart": body_text,
+    }
+
+    if body_html:
+        message["HTMLPart"] = body_html
 
     # CC
     if cc:
         cc_list = [cc] if isinstance(cc, str) else list(cc)
-        for addr in cc_list:
-            message.add_cc(Cc(addr))
+        message["Cc"] = [{"Email": addr, "Name": addr} for addr in cc_list]
 
     # Pièces jointes
     if attachments:
-        for att in attachments:
-            sg_attachment = Attachment(
-                FileContent(base64.b64encode(att["content"]).decode("utf-8")),
-                FileName(att["filename"]),
-                FileType(att["mime_type"]),
-                Disposition("attachment"),
-            )
-            message.add_attachment(sg_attachment)
+        message["Attachments"] = [
+            {
+                "ContentType": att["mime_type"],
+                "Filename": att["filename"],
+                "Base64Content": base64.b64encode(att["content"]).decode("utf-8"),
+            }
+            for att in attachments
+        ]
 
     try:
-        sg = sendgrid.SendGridAPIClient(api_key)
-        response = sg.send(message)
-        status = response.status_code
+        mailjet = Client(auth=(api_key, api_secret), version="v3.1")
+        result = mailjet.send.create(data={"Messages": [message]})
+        status = result.status_code
 
-        if 200 <= status < 300:
+        if status == 200:
             logger.info("[EMAIL] Envoyé avec succès (status %d) à %s", status, to_list)
             return True
 
-        logger.error("[EMAIL] Échec envoi (status %d): %s", status, response.body)
+        logger.error("[EMAIL] Échec envoi (status %d): %s", status, result.json())
         return False
 
     except Exception as exc:
