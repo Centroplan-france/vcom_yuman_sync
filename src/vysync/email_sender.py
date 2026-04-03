@@ -12,6 +12,18 @@ from mailjet_rest import Client
 logger = logging.getLogger(__name__)
 
 
+def _parse_emails(value: Union[str, List[str], None]) -> List[str]:
+    """Parse une adresse ou une liste d'adresses séparées par ';'."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        result: List[str] = []
+        for v in value:
+            result.extend(addr.strip() for addr in v.split(";") if addr.strip())
+        return result
+    return [addr.strip() for addr in value.split(";") if addr.strip()]
+
+
 def send_email(
     to: Union[str, List[str]],
     subject: str,
@@ -45,8 +57,13 @@ def send_email(
         logger.warning("[EMAIL] MAILJET_FROM_EMAIL absent ou vide, email non envoyé")
         return False
 
-    # Normaliser les destinataires
-    to_list = [to] if isinstance(to, str) else list(to)
+    # Normaliser les destinataires (supporte le séparateur ';')
+    to_list = _parse_emails(to)
+    cc_list = _parse_emails(cc)
+
+    if not to_list:
+        logger.error("[EMAIL] Aucun destinataire fourni")
+        return False
 
     message: dict = {
         "From": {"Email": from_email, "Name": "VYSYNC"},
@@ -59,8 +76,7 @@ def send_email(
         message["HTMLPart"] = body_html
 
     # CC
-    if cc:
-        cc_list = [cc] if isinstance(cc, str) else list(cc)
+    if cc_list:
         message["Cc"] = [{"Email": addr, "Name": addr} for addr in cc_list]
 
     # Pièces jointes

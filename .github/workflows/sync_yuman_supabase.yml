@@ -59,7 +59,7 @@ jobs:
           MAILJET_API_KEY: ${{ secrets.MAILJET_API_KEY }}
           MAILJET_API_SECRET: ${{ secrets.MAILJET_API_SECRET }}
           MAILJET_FROM_EMAIL: ${{ secrets.MAILJET_FROM_EMAIL }}
-          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
           
           # Niveau de log
           LOG_LEVEL: ${{ inputs.debug == 'true' && 'DEBUG' || 'INFO' }}
