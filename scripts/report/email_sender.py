@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Envoi du rapport par email via le module centralisé SendGrid."""
+"""Envoi du rapport par email via le module centralisé Mailjet."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def send_report_email(
     pdf_path: Path,
     date_str: str,
 ) -> str:
-    """Envoie le rapport par email via SendGrid.
+    """Envoie le rapport par email via Mailjet.
 
     Args:
         html_summary: Corps HTML du résumé
@@ -64,4 +64,4 @@ def send_report_email(
         logger.info("[REPORT] Email envoyé avec succès")
         return "sent"
 
-    return "error: SendGrid send failed (see logs)"
+    return "error: Mailjet send failed (see logs)"
