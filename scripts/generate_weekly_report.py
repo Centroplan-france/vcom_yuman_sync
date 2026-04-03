@@ -6,7 +6,7 @@ Point d'entrée principal :
   poetry run python scripts/generate_weekly_report.py
 
 Le script :
-1. Interroge PostgreSQL (via DATABASE_URL) pour récupérer les données WO
+1. Interroge Supabase (via SUPABASE_URL) pour récupérer les données WO
 2. Génère un rapport HTML complet
 3. Convertit le HTML en PDF (weasyprint)
 4. Envoie un email via Resend (résumé + PDF en PJ)
