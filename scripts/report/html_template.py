@@ -744,7 +744,8 @@ def generate_html(data: ReportData, report_date: datetime) -> str:
             html += f'<tr{row_class}>'
             html += f'<td>{_wo_id_tag(age, w["workorder_id"])}</td>'
             html += f'<td>{_short_site_name(w.get("site_name", ""))}</td>'
-            html += f'<td{"  class=\"flag-arret\"" if is_arret else ""}>{title_html}</td>'
+            td_class = ' class="flag-arret"' if is_arret else ""
+            html += f'<td{td_class}>{title_html}</td>'
             html += f'<td class="mono">{_fmt_date(w.get("created"))}</td>'
             html += f'<td class="{_age_class(age)}">{age}j</td>'
             html += '</tr>\n'
@@ -813,7 +814,8 @@ def generate_html(data: ReportData, report_date: datetime) -> str:
             row_class = ' class="alert-row"' if is_arret else ""
             html += f'<tr{row_class}>'
             html += f'<td>{_wo_id_tag(age, w["workorder_id"])}</td>'
-            html += f'<td{"  class=\"flag-arret\"" if is_arret else ""}>{w.get("title", "")}</td>'
+            td_class = ' class="flag-arret"' if is_arret else ""
+            html += f'<td{td_class}>{w.get("title", "")}</td>'
             html += f'<td>{_short_site_name(w.get("site_name", ""))}</td>'
             html += f'<td>{w.get("tech_name") or "—"}</td>'
             html += f'<td class="mono">{_fmt_date(w.get("planned"))}</td>'
@@ -977,7 +979,8 @@ def generate_html(data: ReportData, report_date: datetime) -> str:
             html += f'<td>{_wo_id_tag(age, w["workorder_id"])}</td>'
             html += f'<td>{_short_site_name(w.get("site_name", ""))}</td>'
             html += f'<td><span class="tag {cat_cls}">{cat}</span></td>'
-            html += f'<td{"  class=\"flag-arret\"" if is_arret else ""}>{w.get("title", "")}</td>'
+            td_class = ' class="flag-arret"' if is_arret else ""
+            html += f'<td{td_class}>{w.get("title", "")}</td>'
             html += f'<td class="{_age_class(age)}">{age}j</td>'
             html += '</tr>\n'
         html += '</tbody></table></div>\n'
